@@ -23,6 +23,9 @@
     "code": {
       "type": "string"
     },
+    "description": {
+      "type": "text"
+    },
     "category": {
       "type": "relation",
       "relation": "manyToOne",

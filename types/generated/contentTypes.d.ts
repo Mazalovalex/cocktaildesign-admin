@@ -592,6 +592,7 @@ export interface ApiMoyskladProductMoyskladProduct
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    description: Schema.Attribute.Text;
     displayTitle: Schema.Attribute.String;
     href: Schema.Attribute.String &
       Schema.Attribute.Required &
