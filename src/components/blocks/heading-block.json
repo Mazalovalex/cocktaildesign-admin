@@ -1,0 +1,22 @@
+{
+  "collectionName": "components_blocks_heading_blocks",
+  "info": {
+    "displayName": "HeadingBlock"
+  },
+  "options": {},
+  "attributes": {
+    "content": {
+      "type": "string",
+      "required": true
+    },
+    "level": {
+      "type": "enumeration",
+      "required": true,
+      "enum": [
+        "h2",
+        "h3"
+      ]
+    }
+  },
+  "config": {}
+}

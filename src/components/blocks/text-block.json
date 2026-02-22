@@ -1,0 +1,15 @@
+{
+  "collectionName": "components_blocks_text_blocks",
+  "info": {
+    "displayName": "TextBlock",
+    "icon": "bold"
+  },
+  "options": {},
+  "attributes": {
+    "content": {
+      "type": "text",
+      "required": true
+    }
+  },
+  "config": {}
+}

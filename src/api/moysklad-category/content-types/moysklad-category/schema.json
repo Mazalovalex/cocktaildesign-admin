@@ -1,0 +1,50 @@
+{
+  "kind": "collectionType",
+  "collectionName": "moysklad_categories",
+  "info": {
+    "singularName": "moysklad-category",
+    "pluralName": "moysklad-categories",
+    "displayName": "Категории"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true
+    },
+    "moyskladId": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "href": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "pathName": {
+      "type": "string"
+    },
+    "products": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::moysklad-product.moysklad-product",
+      "mappedBy": "category"
+    },
+    "children": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::moysklad-category.moysklad-category",
+      "mappedBy": "parent"
+    },
+    "parent": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::moysklad-category.moysklad-category",
+      "inversedBy": "children"
+    }
+  }
+}

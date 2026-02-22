@@ -1,0 +1,18 @@
+{
+  "collectionName": "components_blocks_list_blocks",
+  "info": {
+    "displayName": "ListBlock",
+    "icon": "bulletList"
+  },
+  "options": {},
+  "attributes": {
+    "items": {
+      "type": "json",
+      "required": true
+    },
+    "ordered": {
+      "type": "boolean"
+    }
+  },
+  "config": {}
+}

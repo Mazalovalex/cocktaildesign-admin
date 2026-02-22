@@ -1,0 +1,36 @@
+{
+  "kind": "collectionType",
+  "collectionName": "catalog_collections",
+  "info": {
+    "singularName": "catalog-collection",
+    "pluralName": "catalog-collections",
+    "displayName": "Подборка товаров"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "description": {
+      "type": "text"
+    },
+    "sortOrder": {
+      "type": "integer"
+    },
+    "products": {
+      "type": "relation",
+      "relation": "manyToMany",
+      "target": "api::moysklad-product.moysklad-product",
+      "inversedBy": "catalog_collections"
+    }
+  }
+}

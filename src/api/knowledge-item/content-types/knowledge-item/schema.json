@@ -1,0 +1,87 @@
+{
+  "kind": "collectionType",
+  "collectionName": "knowledge_items",
+  "info": {
+    "singularName": "knowledge-item",
+    "pluralName": "knowledge-items",
+    "displayName": "Раздел – Знания"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "title",
+      "required": true
+    },
+    "tab": {
+      "type": "enumeration",
+      "required": true,
+      "enum": [
+        "techniques",
+        "education",
+        "podcasts",
+        "industry",
+        "resources"
+      ]
+    },
+    "format": {
+      "type": "enumeration",
+      "required": true,
+      "enum": [
+        "video",
+        "article",
+        "material"
+      ]
+    },
+    "date": {
+      "type": "date",
+      "required": true
+    },
+    "cover": {
+      "type": "media",
+      "multiple": false,
+      "required": true,
+      "allowedTypes": [
+        "images",
+        "files",
+        "videos",
+        "audios"
+      ]
+    },
+    "description": {
+      "type": "text"
+    },
+    "duration": {
+      "type": "string"
+    },
+    "readTime": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "embedUrl": {
+      "type": "string"
+    },
+    "externalUrl": {
+      "type": "string"
+    },
+    "blocks": {
+      "type": "dynamiczone",
+      "components": [
+        "blocks.heading-block",
+        "blocks.image-block",
+        "blocks.list-block",
+        "blocks.link-block",
+        "blocks.text-block"
+      ]
+    }
+  }
+}
