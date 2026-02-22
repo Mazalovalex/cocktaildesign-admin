@@ -147,3 +147,5 @@ dist
 build
 .strapi-updater.json
 .strapi-cloud.json
+# uploads are stored outside the repo
+public/uploads
