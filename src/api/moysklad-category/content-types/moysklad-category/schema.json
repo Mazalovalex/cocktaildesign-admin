@@ -28,6 +28,10 @@
     "pathName": {
       "type": "string"
     },
+    "slug": {
+      "type": "string",
+      "unique": true
+    },
     "products": {
       "type": "relation",
       "relation": "oneToMany",
