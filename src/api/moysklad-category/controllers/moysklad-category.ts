@@ -1,6 +1,6 @@
 // src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
-import syncServiceFactory from "../sync/sync";
+import syncServiceFactory from "../services/sync";
 
 function isSyncLockError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
