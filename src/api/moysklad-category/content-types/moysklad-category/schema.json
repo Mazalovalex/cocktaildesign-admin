@@ -32,6 +32,10 @@
         "images"
       ]
     },
+    "productsCount": {
+      "type": "integer",
+      "min": 0
+    },
     "pathName": {
       "type": "string"
     },

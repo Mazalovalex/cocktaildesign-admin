@@ -562,6 +562,13 @@ export interface ApiMoyskladCategoryMoyskladCategory
       'oneToMany',
       'api::moysklad-product.moysklad-product'
     >;
+    productsCount: Schema.Attribute.Integer &
+      Schema.Attribute.SetMinMax<
+        {
+          min: 0;
+        },
+        number
+      >;
     publishedAt: Schema.Attribute.DateTime;
     slug: Schema.Attribute.String & Schema.Attribute.Unique;
     updatedAt: Schema.Attribute.DateTime;
