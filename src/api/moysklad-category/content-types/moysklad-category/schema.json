@@ -25,6 +25,13 @@
       "required": true,
       "unique": true
     },
+    "image": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": [
+        "images"
+      ]
+    },
     "pathName": {
       "type": "string"
     },
