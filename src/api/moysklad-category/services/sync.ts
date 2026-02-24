@@ -60,7 +60,7 @@ function getMoySkladHeaders(token: string) {
 
 /**
  * Универсальный fetch JSON из MoySklad с нормальной ошибкой.
- * (Здесь generic — он сильно упрощает типизацию и не усложняет код.)
+ * (Generic здесь оправдан: он даёт тип результата без лишнего шума.)
  */
 async function fetchJson<T>(url: string, token: string): Promise<T> {
   const res = await fetch(url, { headers: getMoySkladHeaders(token) });
@@ -107,7 +107,11 @@ function makeStableSlug(moyskladId: string): string {
   return `ms-${moyskladId.slice(0, 8)}`;
 }
 
-export default () => ({
+/**
+ * Важно: выносим фабрику в константу.
+ * Так TS/Strapi гарантированно видят модуль (ESM), и не будет TS2306.
+ */
+const syncServiceFactory = () => ({
   async syncAll() {
     // 1) Lock: не даём запустить синк параллельно (важно для целостности БД)
     await acquireMoySkladSyncLock("categories");
@@ -159,23 +163,15 @@ export default () => ({
 
       /**
        * 8) Upsert без parent (первый проход)
-       * Почему так:
-       * - чтобы во втором проходе родитель точно существовал.
-       *
-       * Важно про slug:
-       * - читаем existing.slug
-       * - если уже есть → НЕ меняем
-       * - если нет → ставим ms-xxxxxxxx
        *
        * productsCount (MVP):
        * - сейчас НЕ считаем (фильтр MoySklad по productFolder ломается).
-       * - но и null нам не нужен: для фронта удобнее 0.
+       * - для фронта лучше 0, чем null.
        * - если в БД уже есть число (например, ты заполнишь отдельным джобом) — НЕ затираем.
        */
       for (const folder of filtered) {
         const existing = await categoryQuery.findOne({
           where: { moyskladId: folder.id },
-          // ✅ добавили productsCount, чтобы не затирать возможный будущий пересчёт
           select: ["id", "slug", "productsCount"],
         });
 
@@ -187,9 +183,7 @@ export default () => ({
           href: folder.meta.href,
           pathName: folder.pathName ?? null,
 
-          // ✅ больше не будет null
           productsCount: safeProductsCount,
-
           slug: existing?.slug ?? makeStableSlug(folder.id),
           publishedAt: nowIso,
         };
@@ -214,6 +208,7 @@ export default () => ({
         const parentMoyskladId = pickIdFromHref(folder.productFolder?.meta?.href);
         if (!parentMoyskladId) continue;
 
+        // Родитель должен быть внутри витринного поддерева, иначе не связываем.
         const parentInTree = filtered.some((f) => f.id === parentMoyskladId);
         if (!parentInTree) continue;
 
@@ -259,3 +254,5 @@ export default () => ({
     }
   },
 });
+
+export default syncServiceFactory;
