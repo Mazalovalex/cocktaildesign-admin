@@ -275,6 +275,11 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         });
 
         const payload = {
+          // ВАЖНО: фиксируем тип записи в нашей единой витринной модели.
+          // Сейчас это обычный товар из /entity/product.
+          // Позже для /entity/bundle будет type: "bundle".
+          type: "product",
+
           name: p.name,
           displayTitle: p.name,
 
