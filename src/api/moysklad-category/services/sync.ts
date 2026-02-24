@@ -174,15 +174,13 @@ const syncServiceFactory = () => ({
           select: ["id", "slug", "productsCount"],
         });
 
-        const safeProductsCount = typeof existing?.productsCount === "number" ? existing.productsCount : 0;
-
         const payload = {
           name: folder.name,
           moyskladId: folder.id,
           href: folder.meta.href,
           pathName: folder.pathName ?? null,
 
-          productsCount: safeProductsCount,
+          // Это производное поле — его обновляет sync товаров.
           slug: existing?.slug ?? makeStableSlug(folder.id),
           publishedAt: nowIso,
         };

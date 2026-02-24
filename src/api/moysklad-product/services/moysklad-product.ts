@@ -1,3 +1,12 @@
+// src/api/moysklad-product/services/moysklad-product.ts
+// Задача файла:
+// 1) Забрать товары из MoySklad
+// 2) Оставить только товары, которые попадают в уже синкнутые категории
+// 3) Сделать upsert товаров в Strapi
+// 4) Удалить товары, которых больше нет в MoySklad/в витринных категориях
+// 5) Пересчитать productsCount у категорий
+// 6) Вести статусы синка + lock, чтобы синк не запускался параллельно
+
 import { factories } from "@strapi/strapi";
 import {
   acquireMoySkladSyncLock,
@@ -7,43 +16,42 @@ import {
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
 
-type MoySkladMeta = { href: string; type: string; mediaType?: string };
-
-type MoySkladPriceType = { name: string };
-
-type MoySkladSalePrice = {
-  value: number;
-  priceType?: MoySkladPriceType;
+type MoySkladMeta = {
+  href: string;
 };
 
-type MoySkladUom = {
-  name?: string;
-  meta?: MoySkladMeta;
+type MoySkladSalePrice = {
+  value: number; // копейки
+  priceType?: {
+    name: string;
+  };
 };
 
 type MoySkladProduct = {
   id: string;
   name: string;
   code?: string;
-  article?: string;
   updated?: string;
 
   meta: MoySkladMeta;
-  productFolder?: { meta: MoySkladMeta };
+
+  productFolder?: {
+    meta: MoySkladMeta;
+  };
 
   salePrices?: MoySkladSalePrice[];
 
-  uom?: MoySkladUom;
+  uom?: {
+    name?: string;
+  };
+
   weight?: number | null;
   volume?: number | null;
 };
 
-type MoySkladListResponse<T> = {
-  rows: T[];
+type MoySkladListResponse = {
+  rows: MoySkladProduct[];
   meta: {
-    size: number;
-    limit: number;
-    offset: number;
     nextHref?: string;
   };
 };
@@ -55,17 +63,10 @@ function getMoySkladHeaders(token: string) {
   } as const;
 }
 
-async function fetchJson<T>(url: string, token: string): Promise<T> {
-  const res = await fetch(url, { headers: getMoySkladHeaders(token) });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`MoySklad API error ${res.status}: ${text}`);
-  }
-
-  return (await res.json()) as T;
-}
-
+/**
+ * Достаём UUID из href.
+ * Важно: режем ?query и #hash, чтобы не получить кривой ID.
+ */
 function pickIdFromHref(href?: string): string | null {
   if (!href) return null;
 
@@ -78,30 +79,59 @@ function pickIdFromHref(href?: string): string | null {
   return last ? last : null;
 }
 
-function kopecksToRub(value?: number | null): number | null {
-  if (typeof value !== "number") return null;
-  return Math.round(value) / 100;
+/**
+ * Цена из salePrices по точному имени типа цены.
+ * MoySklad хранит value в копейках.
+ */
+function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
+  if (!prices?.length) return null;
+
+  const found = prices.find((p) => p.priceType?.name === name);
+  if (!found) return null;
+
+  // Возвращаем рубли целым числом (integer в Strapi schema)
+  return Math.round(found.value / 100);
 }
 
 /**
- * Ищем цену по точному названию типа цены.
- * Важно: без fallback, чтобы не перепутать цены.
+ * Type-guard для ответа MoySklad.
+ * Нужен, потому что в Node/undici res.json() часто typed как unknown.
  */
-function pickPriceByTypeName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
-  if (!prices?.length) return null;
+function isMoySkladListResponse(data: unknown): data is MoySkladListResponse {
+  if (!data || typeof data !== "object") return false;
 
-  const found = prices.find((p) => p?.priceType?.name === name);
-  if (!found) return null;
+  const d = data as { rows?: unknown; meta?: unknown };
+  const hasRows = Array.isArray(d.rows);
+  const hasMeta = typeof d.meta === "object" && d.meta !== null;
 
-  return kopecksToRub(found.value);
+  return hasRows && hasMeta;
 }
 
-export default factories.createCoreService("api::moysklad-product.moysklad-product", () => ({
+async function fetchJson(url: string, token: string): Promise<MoySkladListResponse> {
+  const res = await fetch(url, { headers: getMoySkladHeaders(token) });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MoySklad API error ${res.status}: ${text}`);
+  }
+
+  const data = (await res.json()) as unknown;
+
+  if (!isMoySkladListResponse(data)) {
+    // Чтобы быстро увидеть реальный ответ, который прилетел
+    throw new Error(`Unexpected MoySklad response shape: ${JSON.stringify(data).slice(0, 500)}`);
+  }
+
+  return data;
+}
+
+export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
   /**
    * Полный синк товаров.
    * - берём только товары из синкнутых категорий
    * - price     = "Цена с сайта"
    * - priceOld  = "Цена продажи"
+   * - пересчитываем productsCount у категорий
    */
   async syncAll() {
     await acquireMoySkladSyncLock("products");
@@ -114,54 +144,49 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
       const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-      // допустимые категории
+      // 1) Разрешённые категории (уже синкнутые витринные)
       const categories = await categoryQuery.findMany({
         select: ["id", "moyskladId"],
         limit: 10000,
       });
 
-      const allowedCategoryIds = new Set(categories.map((c) => c.moyskladId));
+      const allowedCategoryMsIds = new Set(categories.map((c) => c.moyskladId));
+      const categoryIdByMsId = new Map<string, number>(categories.map((c) => [c.moyskladId, c.id]));
 
-      const categoryIdByMoyskladId = new Map<string, number>(categories.map((c) => [c.moyskladId, c.id]));
-
-      // fetch products
+      // 2) Тянем все товары из MoySklad (пагинация)
       const all: MoySkladProduct[] = [];
-      const limit = 100;
       let offset = 0;
 
       while (true) {
-        const url = `https://api.moysklad.ru/api/remap/1.2/entity/product` + `?limit=${limit}&offset=${offset}`;
-
-        const data = await fetchJson<MoySkladListResponse<MoySkladProduct>>(url, token);
+        const url = `https://api.moysklad.ru/api/remap/1.2/entity/product?limit=100&offset=${offset}`;
+        const data = await fetchJson(url, token);
 
         all.push(...data.rows);
 
         if (!data.meta.nextHref) break;
-        offset += limit;
+        offset += 100;
       }
 
-      // фильтрация по категориям
-      const filtered = all.filter((p) => {
-        const categoryId = pickIdFromHref(p.productFolder?.meta?.href);
-        return categoryId && allowedCategoryIds.has(categoryId);
-      });
-
       const nowIso = new Date().toISOString();
+      const keepIds = new Set<string>();
 
-      // upsert
-      for (const p of filtered) {
+      // 3) Upsert только тех товаров, что попадают в allowed категории
+      for (const p of all) {
+        const categoryMsId = pickIdFromHref(p.productFolder?.meta?.href);
+        if (!categoryMsId) continue;
+
+        // Жёстко отсекаем товары не из витринных категорий
+        if (!allowedCategoryMsIds.has(categoryMsId)) continue;
+
+        const categoryId = categoryIdByMsId.get(categoryMsId);
+        if (!categoryId) continue;
+
+        keepIds.add(p.id);
+
         const existing = await productQuery.findOne({
           where: { moyskladId: p.id },
           select: ["id"],
         });
-
-        const categoryMoyskladId = pickIdFromHref(p.productFolder?.meta?.href);
-
-        const categoryId = categoryMoyskladId ? (categoryIdByMoyskladId.get(categoryMoyskladId) ?? null) : null;
-
-        const price = pickPriceByTypeName(p.salePrices, "Цена с сайта");
-
-        const priceOld = pickPriceByTypeName(p.salePrices, "Цена продажи");
 
         const payload = {
           name: p.name,
@@ -174,10 +199,12 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
           category: categoryId,
 
-          price,
-          priceOld,
+          price: priceByName(p.salePrices, "Цена с сайта"),
+          priceOld: priceByName(p.salePrices, "Цена продажи"),
 
           uom: p.uom?.name ?? null,
+
+          // В schema это decimal → оставляем только number, иначе null
           weight: typeof p.weight === "number" ? p.weight : null,
           volume: typeof p.volume === "number" ? p.volume : null,
 
@@ -196,104 +223,39 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         }
       }
 
-      // удаляем лишние товары
-      const keepIds = new Set(filtered.map((p) => p.id));
-
+      // 4) Удаляем товары, которые больше не должны быть в витрине
       await productQuery.deleteMany({
         where: {
-          moyskladId: {
-            $notIn: Array.from(keepIds),
-          },
+          moyskladId: { $notIn: Array.from(keepIds) },
         },
       });
 
-      await markSyncOk("products", {
-        products: filtered.length,
-      });
+      // 5) Пересчитываем productsCount по каждой категории
+      // (да, N+1 — но это простой и надёжный MVP; потом оптимизируем при необходимости)
+      for (const category of categories) {
+        // В Strapi v5 relation-фильтры надёжнее писать через вложенный объект
+        const count = await productQuery.count({
+          where: {
+            category: {
+              id: category.id,
+            },
+          },
+        });
 
-      return {
-        ok: true,
-        total: filtered.length,
-      };
+        await categoryQuery.update({
+          where: { id: category.id },
+          data: { productsCount: count },
+        });
+      }
+
+      await markSyncOk("products", { products: keepIds.size });
+
+      return { ok: true, total: keepIds.size };
     } catch (e) {
       await markSyncError("products", e);
       throw e;
     } finally {
       await releaseMoySkladSyncLock("products");
     }
-  },
-
-  /**
-   * Sync одного товара через webhook
-   */
-  async syncOneFromWebhook(entity: unknown) {
-    const p = entity as MoySkladProduct;
-
-    if (!p?.id || !p?.meta?.href) {
-      throw new Error("Invalid product payload");
-    }
-
-    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
-
-    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
-
-    const categoryMoyskladId = pickIdFromHref(p.productFolder?.meta?.href);
-
-    if (!categoryMoyskladId) {
-      return { ok: true, skipped: true };
-    }
-
-    const category = await categoryQuery.findOne({
-      where: { moyskladId: categoryMoyskladId },
-    });
-
-    if (!category) {
-      return { ok: true, skipped: true };
-    }
-
-    const existing = await productQuery.findOne({
-      where: { moyskladId: p.id },
-      select: ["id"],
-    });
-
-    const nowIso = new Date().toISOString();
-
-    const price = pickPriceByTypeName(p.salePrices, "Цена с сайта");
-
-    const priceOld = pickPriceByTypeName(p.salePrices, "Цена продажи");
-
-    const payload = {
-      name: p.name,
-      displayTitle: p.name,
-
-      moyskladId: p.id,
-      href: p.meta.href,
-      code: p.code ?? null,
-      updated: p.updated ?? null,
-
-      category: category.id,
-
-      price,
-      priceOld,
-
-      uom: p.uom?.name ?? null,
-      weight: typeof p.weight === "number" ? p.weight : null,
-      volume: typeof p.volume === "number" ? p.volume : null,
-
-      publishedAt: nowIso,
-    };
-
-    if (existing) {
-      await productQuery.update({
-        where: { id: existing.id },
-        data: payload,
-      });
-    } else {
-      await productQuery.create({
-        data: payload,
-      });
-    }
-
-    return { ok: true };
   },
 }));
