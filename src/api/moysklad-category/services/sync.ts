@@ -167,21 +167,28 @@ export default () => ({
        * - если уже есть → НЕ меняем
        * - если нет → ставим ms-xxxxxxxx
        *
-       * productsCount:
-       * - здесь НЕ считаем (фильтр MoySklad по productFolder ломается).
-       * - будем заполнять отдельным шагом через синк товаров.
+       * productsCount (MVP):
+       * - сейчас НЕ считаем (фильтр MoySklad по productFolder ломается).
+       * - но и null нам не нужен: для фронта удобнее 0.
+       * - если в БД уже есть число (например, ты заполнишь отдельным джобом) — НЕ затираем.
        */
       for (const folder of filtered) {
         const existing = await categoryQuery.findOne({
           where: { moyskladId: folder.id },
-          select: ["id", "slug"],
+          // ✅ добавили productsCount, чтобы не затирать возможный будущий пересчёт
+          select: ["id", "slug", "productsCount"],
         });
+
+        const safeProductsCount = typeof existing?.productsCount === "number" ? existing.productsCount : 0;
 
         const payload = {
           name: folder.name,
           moyskladId: folder.id,
           href: folder.meta.href,
           pathName: folder.pathName ?? null,
+
+          // ✅ больше не будет null
+          productsCount: safeProductsCount,
 
           slug: existing?.slug ?? makeStableSlug(folder.id),
           publishedAt: nowIso,
