@@ -44,12 +44,6 @@ type MoySkladListResponse<T> = {
   };
 };
 
-type MoySkladMetaOnlyResponse = {
-  meta: {
-    size: number; // ✅ общее кол-во найденных товаров
-  };
-};
-
 /**
  * Витринный корень: от него и ниже мы синкаем дерево.
  * Это "граница" — всё выше/вне поддерева мы не берём в витрину.
@@ -79,19 +73,6 @@ async function fetchJson<T>(url: string, token: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-async function fetchProductsCountByFolder(folderId: string, token: string): Promise<number> {
-  // Важно: limit=1, потому что нам не нужны rows, нам нужна meta.size
-  const url =
-    `https://api.moysklad.ru/api/remap/1.2/entity/product` +
-    `?filter=productFolder=https://api.moysklad.ru/api/remap/1.2/entity/productfolder/${folderId}` +
-    `&limit=1`;
-
-  const data = await fetchJson<MoySkladMetaOnlyResponse>(url, token);
-
-  // size всегда число, но на всякий случай страхуемся
-  return typeof data.meta?.size === "number" ? data.meta.size : 0;
-}
-
 /**
  * Из meta.href вынимаем UUID сущности (последний сегмент URL).
  * Дополнительно режем query/hash, чтобы не словить баги сопоставления.
@@ -99,7 +80,6 @@ async function fetchProductsCountByFolder(folderId: string, token: string): Prom
 function pickIdFromHref(href?: string): string | null {
   if (!href) return null;
 
-  // На случай, если href придёт с query/hash
   const clean = href.split("?")[0]?.split("#")[0];
   if (!clean) return null;
 
@@ -174,7 +154,7 @@ export default () => ({
       // 7) Доступ к Strapi Query API (работаем напрямую с БД через Strapi)
       const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-      // Публикуем записи, чтобы они были доступны через Public API (если есть).
+      // draftAndPublish выключен, но publishedAt поле всё равно есть — оставляем как было.
       const nowIso = new Date().toISOString();
 
       /**
@@ -186,14 +166,16 @@ export default () => ({
        * - читаем existing.slug
        * - если уже есть → НЕ меняем
        * - если нет → ставим ms-xxxxxxxx
+       *
+       * productsCount:
+       * - здесь НЕ считаем (фильтр MoySklad по productFolder ломается).
+       * - будем заполнять отдельным шагом через синк товаров.
        */
       for (const folder of filtered) {
         const existing = await categoryQuery.findOne({
           where: { moyskladId: folder.id },
-          select: ["id", "slug"], // чтобы НЕ тянуть лишние поля
+          select: ["id", "slug"],
         });
-
-        const productsCount = await fetchProductsCountByFolder(folder.id, token);
 
         const payload = {
           name: folder.name,
@@ -201,9 +183,7 @@ export default () => ({
           href: folder.meta.href,
           pathName: folder.pathName ?? null,
 
-          productsCount,
           slug: existing?.slug ?? makeStableSlug(folder.id),
-
           publishedAt: nowIso,
         };
 
@@ -224,15 +204,12 @@ export default () => ({
        * Здесь мы проставляем дерево любой глубины.
        */
       for (const folder of filtered) {
-        // moyskladId родителя вытаскиваем из href
         const parentMoyskladId = pickIdFromHref(folder.productFolder?.meta?.href);
         if (!parentMoyskladId) continue;
 
-        // Родитель должен быть внутри витринного поддерева, иначе не связываем.
         const parentInTree = filtered.some((f) => f.id === parentMoyskladId);
         if (!parentInTree) continue;
 
-        // Находим "меня" и "родителя" в Strapi
         const me = await categoryQuery.findOne({
           where: { moyskladId: folder.id },
           select: ["id"],
@@ -245,7 +222,6 @@ export default () => ({
 
         if (!me || !parent) continue;
 
-        // Ставим parent связь
         await categoryQuery.update({
           where: { id: me.id },
           data: { parent: parent.id },
@@ -254,8 +230,6 @@ export default () => ({
 
       /**
        * 10) Чистка: удаляем категории вне поддерева
-       * На MVP это ок (жёсткое удаление).
-       * Позже можно заменить на archived/isActive=false.
        */
       const keepIds = new Set(filtered.map((f) => f.id));
 
@@ -267,16 +241,13 @@ export default () => ({
 
       const result = { ok: true, total: filtered.length, root: rootPath };
 
-      // 11) Статус успеха
       await markSyncOk("categories", { categories: filtered.length });
 
       return result;
     } catch (e) {
-      // 12) Статус ошибки (и пробрасываем исключение выше)
       await markSyncError("categories", e);
       throw e;
     } finally {
-      // 13) Lock всегда освобождаем
       await releaseMoySkladSyncLock("categories");
     }
   },
