@@ -1,4 +1,4 @@
-// src/api/moysklad-category/services/sync.ts
+// backend/src/api/moysklad-category/services/sync.ts
 // Задача файла:
 // 1) Забрать категории (productfolder) из MoySklad
 // 2) Оставить только нужное поддерево (витринный корень ROOT_NAME)
@@ -6,6 +6,10 @@
 // 4) Во втором проходе проставить parent-связи (чтобы дерево было любой глубины: 2–4+ уровней)
 // 5) Удалить категории вне поддерева
 // 6) Вести статусы синка + lock, чтобы синк не запускался параллельно
+//
+// Дополнительно (по твоей задаче с витриной):
+// 7) Пересчитать productsCount "внутри дерева" (aggregate по descendants) и сохранить в БД.
+//    Это даёт тебе корректные цифры для "Шейкеры" и для "COCKTAILDESIGN (Процент офис)".
 //
 // Важно про slug (для фронта):
 // - slug стабилен и строится из moyskladId: ms-<первые 8 символов>
@@ -59,7 +63,7 @@ function getMoySkladHeaders(token: string) {
 
 /**
  * Универсальный fetch JSON из MoySklad с нормальной ошибкой.
- * (Generic здесь оправдан: он даёт тип результата без лишнего шума.)
+ * Generic здесь уместен: он даёт точный тип ответа и меньше шансов ошибиться по полям.
  */
 async function fetchJson<T>(url: string, token: string): Promise<T> {
   const res = await fetch(url, { headers: getMoySkladHeaders(token) });
@@ -104,6 +108,112 @@ function buildFolderFullPath(folder: MoySkladProductFolder): string {
  */
 function makeStableSlug(moyskladId: string): string {
   return `ms-${moyskladId.slice(0, 8)}`;
+}
+
+/**
+ * В Strapi поля могут отличаться (в процессе миграции схемы).
+ * Чтобы не падать, проверяем наличие атрибутов в content-type.
+ */
+function hasCategoryAttribute(attrName: string): boolean {
+  const ct = strapi.contentTypes["api::moysklad-category.moysklad-category"];
+  return Boolean(ct?.attributes && Object.prototype.hasOwnProperty.call(ct.attributes, attrName));
+}
+
+/**
+ * Пересчёт счётчиков категорий "по дереву":
+ * - direct: товары, привязанные к категории напрямую
+ * - total: direct + сумма total всех дочерних
+ *
+ * По умолчанию:
+ * - total пишем в productsCount (чтобы фронт/текущие запросы сразу заработали)
+ * - если в модели есть productsCountDirect / productsCountTotal — пишем и туда тоже.
+ *
+ * Важно:
+ * - эта функция не трогает синк MoySklad. Она работает чисто по данным Strapi (товары+дерево).
+ * - запускать её нужно после products sync (или когда уверен, что товары уже в БД).
+ */
+async function recomputeCategoryCountsForTree() {
+  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+  // Берём все категории (минимальные поля + parent), чтобы собрать дерево.
+  const categories = await categoryQuery.findMany({
+    select: ["id"],
+    populate: { parent: { select: ["id"] } },
+    // На всякий случай, если дефолтная пагинация ограничивает.
+    limit: 100000,
+  });
+
+  // Берём все товары и их category (минимальные поля).
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+  const products = await productQuery.findMany({
+    select: ["id"],
+    populate: { category: { select: ["id"] } },
+    limit: 200000,
+  });
+
+  // directCount: сколько товаров привязано напрямую к категории
+  const directCountByCategoryId = new Map<number, number>();
+
+  for (const p of products) {
+    const cat = p.category;
+    if (!cat?.id) continue;
+
+    const prev = directCountByCategoryId.get(cat.id) ?? 0;
+    directCountByCategoryId.set(cat.id, prev + 1);
+  }
+
+  // childrenByParentId: parentId -> childIds[]
+  const childrenByParentId = new Map<number, number[]>();
+
+  for (const c of categories) {
+    const parentId = c.parent?.id;
+    if (!parentId) continue;
+
+    const arr = childrenByParentId.get(parentId) ?? [];
+    arr.push(c.id);
+    childrenByParentId.set(parentId, arr);
+  }
+
+  // totalCount: мемоизация, чтобы не пересчитывать одни и те же ветки
+  const totalByCategoryId = new Map<number, number>();
+
+  const computeTotal = (categoryId: number): number => {
+    const cached = totalByCategoryId.get(categoryId);
+    if (cached !== undefined) return cached;
+
+    const direct = directCountByCategoryId.get(categoryId) ?? 0;
+    const children = childrenByParentId.get(categoryId) ?? [];
+
+    let total = direct;
+    for (const childId of children) {
+      total += computeTotal(childId);
+    }
+
+    totalByCategoryId.set(categoryId, total);
+    return total;
+  };
+
+  const canWriteDirect = hasCategoryAttribute("productsCountDirect");
+  const canWriteTotal = hasCategoryAttribute("productsCountTotal");
+
+  // Обновляем все категории.
+  // productsCount используем как "total", чтобы ты сразу видел цифры в текущих API-ответах.
+  for (const c of categories) {
+    const direct = directCountByCategoryId.get(c.id) ?? 0;
+    const total = computeTotal(c.id);
+
+    const data: Record<string, unknown> = {
+      productsCount: total,
+    };
+
+    if (canWriteDirect) data.productsCountDirect = direct;
+    if (canWriteTotal) data.productsCountTotal = total;
+
+    await categoryQuery.update({
+      where: { id: c.id },
+      data,
+    });
+  }
 }
 
 /**
@@ -163,15 +273,14 @@ const syncServiceFactory = () => ({
       /**
        * 8) Upsert без parent (первый проход)
        *
-       * productsCount (MVP):
-       * - сейчас НЕ считаем (фильтр MoySklad по productFolder ломается).
-       * - для фронта лучше 0, чем null.
-       * - если в БД уже есть число (например, ты заполнишь отдельным джобом) — НЕ затираем.
+       * Важно про счётчики:
+       * - category sync НЕ должен их затирать
+       * - totals/direct пересчитываются отдельной функцией (после products sync)
        */
       for (const folder of filtered) {
         const existing = await categoryQuery.findOne({
           where: { moyskladId: folder.id },
-          select: ["id", "slug", "productsCount"],
+          select: ["id", "slug"],
         });
 
         const payload = {
@@ -180,8 +289,9 @@ const syncServiceFactory = () => ({
           href: folder.meta.href,
           pathName: folder.pathName ?? null,
 
-          // Это производное поле — его обновляет sync товаров.
+          // slug стабилен и не ломает URL при переименовании
           slug: existing?.slug ?? makeStableSlug(folder.id),
+
           publishedAt: nowIso,
         };
 
@@ -238,6 +348,17 @@ const syncServiceFactory = () => ({
         },
       });
 
+      /**
+       * 11) Пересчитываем productsCount "внутри дерева" (aggregate по descendants).
+       * Это даёт корректные цифры для:
+       * - "Шейкеры" (включая Паризиан/Бостон/Кобблер и т.д.)
+       * - "COCKTAILDESIGN (Процент офис)" как сумма по всему поддереву
+       *
+       * ⚠️ В идеале запускать после products sync.
+       * Но даже если продукты уже есть в БД — пересчёт всё равно полезен (актуализирует totals).
+       */
+      await recomputeCategoryCountsForTree();
+
       const result = { ok: true, total: filtered.length, root: rootPath };
 
       await markSyncOk("categories", { categories: filtered.length });
@@ -249,6 +370,16 @@ const syncServiceFactory = () => ({
     } finally {
       await releaseMoySkladSyncLock("categories");
     }
+  },
+
+  /**
+   * Отдельный публичный метод на случай, если захочешь дергать пересчёт вручную:
+   * - после products sync
+   * - или по крону
+   */
+  async recomputeCounts() {
+    await recomputeCategoryCountsForTree();
+    return { ok: true };
   },
 });
 

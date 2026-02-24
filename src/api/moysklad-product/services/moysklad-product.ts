@@ -1,10 +1,11 @@
-// src/api/moysklad-product/services/moysklad-product.ts
+// backend/src/api/moysklad-product/services/moysklad-product.ts
 // Задача файла:
 // 1) Забрать товары из MoySklad
 // 2) Оставить только товары, которые попадают в уже синкнутые категории
 // 3) Сделать upsert товаров в Strapi
 // 4) Удалить товары, которых больше нет в MoySklad/в витринных категориях
-// 5) Пересчитать productsCount у категорий
+// 5) Пересчитать productsCount у категорий (ВАЖНО: aggregate по descendants, чтобы у "Шейкеры" и у ROOT
+//    считалось "всё внутри дерева")
 // 6) Вести статусы синка + lock, чтобы синк не запускался параллельно
 
 import { factories } from "@strapi/strapi";
@@ -125,13 +126,92 @@ async function fetchJson(url: string, token: string): Promise<MoySkladListRespon
   return data;
 }
 
+/**
+ * В Strapi поля могут отличаться (в процессе миграции схемы).
+ * Чтобы не падать, проверяем наличие атрибутов в content-type.
+ */
+function hasCategoryAttribute(attrName: string): boolean {
+  const ct = strapi.contentTypes["api::moysklad-category.moysklad-category"];
+  return Boolean(ct?.attributes && Object.prototype.hasOwnProperty.call(ct.attributes, attrName));
+}
+
+/**
+ * Пересчёт счётчиков категорий "по дереву":
+ * - direct: товары, привязанные к категории напрямую (children не включаем)
+ * - total: direct + сумма total всех дочерних
+ *
+ * По умолчанию:
+ * - total пишем в productsCount (чтобы фронт/текущие запросы сразу показывали aggregate)
+ * - если в модели есть productsCountDirect / productsCountTotal — пишем и туда тоже.
+ */
+async function recomputeCategoryCountsForTree(directCountByCategoryId: Map<number, number>) {
+  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+  // Берём дерево: id + parent
+  const categories = await categoryQuery.findMany({
+    select: ["id"],
+    populate: { parent: { select: ["id"] } },
+    limit: 100000,
+  });
+
+  // parentId -> childIds[]
+  const childrenByParentId = new Map<number, number[]>();
+  for (const c of categories) {
+    const parentId = c.parent?.id;
+    if (!parentId) continue;
+
+    const arr = childrenByParentId.get(parentId) ?? [];
+    arr.push(c.id);
+    childrenByParentId.set(parentId, arr);
+  }
+
+  const totalByCategoryId = new Map<number, number>();
+
+  const computeTotal = (categoryId: number): number => {
+    const cached = totalByCategoryId.get(categoryId);
+    if (cached !== undefined) return cached;
+
+    const direct = directCountByCategoryId.get(categoryId) ?? 0;
+    const children = childrenByParentId.get(categoryId) ?? [];
+
+    let total = direct;
+    for (const childId of children) {
+      total += computeTotal(childId);
+    }
+
+    totalByCategoryId.set(categoryId, total);
+    return total;
+  };
+
+  const canWriteDirect = hasCategoryAttribute("productsCountDirect");
+  const canWriteTotal = hasCategoryAttribute("productsCountTotal");
+
+  // Обновляем все категории: productsCount = total (aggregate)
+  for (const c of categories) {
+    const direct = directCountByCategoryId.get(c.id) ?? 0;
+    const total = computeTotal(c.id);
+
+    const data: Record<string, unknown> = {
+      productsCount: total,
+    };
+
+    if (canWriteDirect) data.productsCountDirect = direct;
+    if (canWriteTotal) data.productsCountTotal = total;
+
+    await categoryQuery.update({
+      where: { id: c.id },
+      data,
+    });
+  }
+}
+
 export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
   /**
    * Полный синк товаров.
    * - берём только товары из синкнутых категорий
    * - price     = "Цена с сайта"
    * - priceOld  = "Цена продажи"
-   * - пересчитываем productsCount у категорий
+   * - пересчитываем productsCount у категорий (aggregate по дереву)
    */
   async syncAll() {
     await acquireMoySkladSyncLock("products");
@@ -168,7 +248,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       }
 
       const nowIso = new Date().toISOString();
-      const keepIds = new Set<string>();
+      const keepMsIds = new Set<string>();
+
+      // direct count (только прямые товары, без children)
+      const directCountByCategoryId = new Map<number, number>();
 
       // 3) Upsert только тех товаров, что попадают в allowed категории
       for (const p of all) {
@@ -181,7 +264,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         const categoryId = categoryIdByMsId.get(categoryMsId);
         if (!categoryId) continue;
 
-        keepIds.add(p.id);
+        keepMsIds.add(p.id);
+
+        // Накапливаем direct-count сразу (без N+1 count запросов)
+        directCountByCategoryId.set(categoryId, (directCountByCategoryId.get(categoryId) ?? 0) + 1);
 
         const existing = await productQuery.findOne({
           where: { moyskladId: p.id },
@@ -226,31 +312,20 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       // 4) Удаляем товары, которые больше не должны быть в витрине
       await productQuery.deleteMany({
         where: {
-          moyskladId: { $notIn: Array.from(keepIds) },
+          moyskladId: { $notIn: Array.from(keepMsIds) },
         },
       });
 
-      // 5) Пересчитываем productsCount по каждой категории
-      // (да, N+1 — но это простой и надёжный MVP; потом оптимизируем при необходимости)
-      for (const category of categories) {
-        // В Strapi v5 relation-фильтры надёжнее писать через вложенный объект
-        const count = await productQuery.count({
-          where: {
-            category: {
-              id: category.id,
-            },
-          },
-        });
+      /**
+       * 5) Пересчитываем productsCount "внутри дерева"
+       * - directCount мы уже посчитали при апсерте
+       * - totalCount считаем по parent/children в категориях
+       */
+      await recomputeCategoryCountsForTree(directCountByCategoryId);
 
-        await categoryQuery.update({
-          where: { id: category.id },
-          data: { productsCount: count },
-        });
-      }
+      await markSyncOk("products", { products: keepMsIds.size });
 
-      await markSyncOk("products", { products: keepIds.size });
-
-      return { ok: true, total: keepIds.size };
+      return { ok: true, total: keepMsIds.size };
     } catch (e) {
       await markSyncError("products", e);
       throw e;
