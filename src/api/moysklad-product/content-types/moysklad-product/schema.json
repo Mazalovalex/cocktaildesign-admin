@@ -66,14 +66,23 @@
       "type": "boolean",
       "default": true
     },
+    "displayTitle": {
+      "type": "string"
+    },
     "catalog_collections": {
       "type": "relation",
       "relation": "manyToMany",
       "target": "api::catalog-collection.catalog-collection",
       "mappedBy": "products"
     },
-    "displayTitle": {
-      "type": "string"
+    "type": {
+      "type": "enumeration",
+      "required": true,
+      "default": "product",
+      "enum": [
+        "product",
+        "bundle"
+      ]
     }
   }
 }

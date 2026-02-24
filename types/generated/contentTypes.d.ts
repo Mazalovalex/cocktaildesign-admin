@@ -621,6 +621,9 @@ export interface ApiMoyskladProductMoyskladProduct
     price: Schema.Attribute.Integer;
     priceOld: Schema.Attribute.Integer;
     publishedAt: Schema.Attribute.DateTime;
+    type: Schema.Attribute.Enumeration<['product', 'bundle']> &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<'product'>;
     uom: Schema.Attribute.String;
     updated: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
