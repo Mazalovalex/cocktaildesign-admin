@@ -44,6 +44,12 @@ type MoySkladListResponse<T> = {
   };
 };
 
+type MoySkladMetaOnlyResponse = {
+  meta: {
+    size: number; // ✅ общее кол-во найденных товаров
+  };
+};
+
 /**
  * Витринный корень: от него и ниже мы синкаем дерево.
  * Это "граница" — всё выше/вне поддерева мы не берём в витрину.
@@ -71,6 +77,19 @@ async function fetchJson<T>(url: string, token: string): Promise<T> {
   }
 
   return (await res.json()) as T;
+}
+
+async function fetchProductsCountByFolder(folderId: string, token: string): Promise<number> {
+  // Важно: limit=1, потому что нам не нужны rows, нам нужна meta.size
+  const url =
+    `https://api.moysklad.ru/api/remap/1.2/entity/product` +
+    `?filter=productFolder=https://api.moysklad.ru/api/remap/1.2/entity/productfolder/${folderId}` +
+    `&limit=1`;
+
+  const data = await fetchJson<MoySkladMetaOnlyResponse>(url, token);
+
+  // size всегда число, но на всякий случай страхуемся
+  return typeof data.meta?.size === "number" ? data.meta.size : 0;
 }
 
 /**
@@ -174,13 +193,15 @@ export default () => ({
           select: ["id", "slug"], // чтобы НЕ тянуть лишние поля
         });
 
+        const productsCount = await fetchProductsCountByFolder(folder.id, token);
+
         const payload = {
           name: folder.name,
           moyskladId: folder.id,
           href: folder.meta.href,
           pathName: folder.pathName ?? null,
 
-          // ✅ slug фиксируем один раз
+          productsCount,
           slug: existing?.slug ?? makeStableSlug(folder.id),
 
           publishedAt: nowIso,
