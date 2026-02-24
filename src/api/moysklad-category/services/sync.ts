@@ -1,5 +1,4 @@
 // src/api/moysklad-category/services/sync.ts
-//
 // Задача файла:
 // 1) Забрать категории (productfolder) из MoySklad
 // 2) Оставить только нужное поддерево (витринный корень ROOT_NAME)
