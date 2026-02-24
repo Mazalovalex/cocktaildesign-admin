@@ -1,12 +1,16 @@
 // backend/src/api/moysklad-product/services/moysklad-product.ts
 // Задача файла:
-// 1) Забрать товары из MoySklad
+// 1) Забрать товары (product) из MoySklad
 // 2) Оставить только товары, которые попадают в уже синкнутые категории
 // 3) Сделать upsert товаров в Strapi
 // 4) Удалить товары, которых больше нет в MoySklad/в витринных категориях
-// 5) Пересчитать productsCount у категорий (ВАЖНО: aggregate по descendants, чтобы у "Шейкеры" и у ROOT
+// 5) Пересчитать productsCount у категорий (aggregate по descendants, чтобы у "Шейкеры" и у ROOT
 //    считалось "всё внутри дерева")
 // 6) Вести статусы синка + lock, чтобы синк не запускался параллельно
+//
+// ДОБАВЛЕНО (шаг 1 по bundle):
+// - Тянем bundle из MoySklad отдельно (пока БЕЗ апсерта в Strapi)
+// - Пишем в логи сколько bundle всего и сколько из них попали в allowed категории
 
 import { factories } from "@strapi/strapi";
 import {
@@ -50,8 +54,38 @@ type MoySkladProduct = {
   volume?: number | null;
 };
 
+// Bundle в MoySklad по полям очень похож на Product для наших целей
+type MoySkladBundle = {
+  id: string;
+  name: string;
+  code?: string;
+  updated?: string;
+
+  meta: MoySkladMeta;
+
+  productFolder?: {
+    meta: MoySkladMeta;
+  };
+
+  salePrices?: MoySkladSalePrice[];
+
+  uom?: {
+    name?: string;
+  };
+
+  weight?: number | null;
+  volume?: number | null;
+};
+
 type MoySkladListResponse = {
   rows: MoySkladProduct[];
+  meta: {
+    nextHref?: string;
+  };
+};
+
+type MoySkladBundleListResponse = {
+  rows: MoySkladBundle[];
   meta: {
     nextHref?: string;
   };
@@ -95,10 +129,25 @@ function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): num
 }
 
 /**
- * Type-guard для ответа MoySklad.
+ * Type-guard для ответа MoySklad product-list.
  * Нужен, потому что в Node/undici res.json() часто typed как unknown.
  */
 function isMoySkladListResponse(data: unknown): data is MoySkladListResponse {
+  if (!data || typeof data !== "object") return false;
+
+  const d = data as { rows?: unknown; meta?: unknown };
+  const hasRows = Array.isArray(d.rows);
+  const hasMeta = typeof d.meta === "object" && d.meta !== null;
+
+  return hasRows && hasMeta;
+}
+
+/**
+ * Type-guard для ответа MoySklad bundle-list.
+ * Он такой же по форме: { rows: [], meta: {} }
+ * Делаем отдельной функцией, чтобы в ошибках было ясно, что проверяли.
+ */
+function isMoySkladBundleListResponse(data: unknown): data is MoySkladBundleListResponse {
   if (!data || typeof data !== "object") return false;
 
   const d = data as { rows?: unknown; meta?: unknown };
@@ -120,7 +169,25 @@ async function fetchJson(url: string, token: string): Promise<MoySkladListRespon
 
   if (!isMoySkladListResponse(data)) {
     // Чтобы быстро увидеть реальный ответ, который прилетел
-    throw new Error(`Unexpected MoySklad response shape: ${JSON.stringify(data).slice(0, 500)}`);
+    throw new Error(`Unexpected MoySklad response shape (product): ${JSON.stringify(data).slice(0, 500)}`);
+  }
+
+  return data;
+}
+
+async function fetchBundleJson(url: string, token: string): Promise<MoySkladBundleListResponse> {
+  const res = await fetch(url, { headers: getMoySkladHeaders(token) });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MoySklad API error ${res.status}: ${text}`);
+  }
+
+  const data = (await res.json()) as unknown;
+
+  if (!isMoySkladBundleListResponse(data)) {
+    // Чтобы быстро увидеть реальный ответ, который прилетел
+    throw new Error(`Unexpected MoySklad response shape (bundle): ${JSON.stringify(data).slice(0, 500)}`);
   }
 
   return data;
@@ -233,7 +300,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       const allowedCategoryMsIds = new Set(categories.map((c) => c.moyskladId));
       const categoryIdByMsId = new Map<string, number>(categories.map((c) => [c.moyskladId, c.id]));
 
-      // 2) Тянем все товары из MoySklad (пагинация)
+      // 2) Тянем все товары (product) из MoySklad (пагинация)
       const all: MoySkladProduct[] = [];
       let offset = 0;
 
@@ -245,6 +312,21 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
         if (!data.meta.nextHref) break;
         offset += 100;
+      }
+
+      // 2.1) Тянем все комплекты (bundle) из MoySklad (пагинация)
+      // ВАЖНО: пока только скачиваем и считаем, без апсерта.
+      const allBundles: MoySkladBundle[] = [];
+      let bundleOffset = 0;
+
+      while (true) {
+        const url = `https://api.moysklad.ru/api/remap/1.2/entity/bundle?limit=100&offset=${bundleOffset}`;
+        const data = await fetchBundleJson(url, token);
+
+        allBundles.push(...data.rows);
+
+        if (!data.meta.nextHref) break;
+        bundleOffset += 100;
       }
 
       const nowIso = new Date().toISOString();
@@ -313,6 +395,23 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           });
         }
       }
+
+      // 3.1) Шаг 1 по bundle: просто считаем, сколько bundle попадает в allowed категории
+      let bundlesAllowed = 0;
+
+      for (const b of allBundles) {
+        const categoryMsId = pickIdFromHref(b.productFolder?.meta?.href);
+        if (!categoryMsId) continue;
+        if (!allowedCategoryMsIds.has(categoryMsId)) continue;
+
+        // На этом шаге мы НЕ апсертим bundle.
+        bundlesAllowed += 1;
+      }
+
+      // Логи, чтобы глазами проверить, что bundle реально есть и попадают в витрину
+      strapi.log.info(`[moysklad] products total fetched: ${all.length}`);
+      strapi.log.info(`[moysklad] bundles total fetched: ${allBundles.length}`);
+      strapi.log.info(`[moysklad] bundles allowed by category: ${bundlesAllowed}`);
 
       // 4) Удаляем товары, которые больше не должны быть в витрине
       await productQuery.deleteMany({
