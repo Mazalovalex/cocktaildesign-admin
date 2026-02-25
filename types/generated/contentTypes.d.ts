@@ -529,7 +529,7 @@ export interface ApiMoyskladBundleItemMoyskladBundleItem
     singularName: 'moysklad-bundle-item';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     bundle: Schema.Attribute.Relation<
