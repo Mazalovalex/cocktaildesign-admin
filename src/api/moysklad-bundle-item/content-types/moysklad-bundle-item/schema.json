@@ -11,6 +11,10 @@
   },
   "pluginOptions": {},
   "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
     "quantity": {
       "type": "decimal",
       "required": true,

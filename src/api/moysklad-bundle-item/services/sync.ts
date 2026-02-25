@@ -1,5 +1,11 @@
 // backend/src/api/moysklad-bundle-item/services/sync.ts
 // Задача: синкнуть состав ОДНОГО комплекта (bundle) в Strapi таблицу moysklad-bundle-item.
+//
+// Важно по draft/publish:
+// - В твоём schema для moysklad-bundle-item сейчас draftAndPublish = false,
+//   поэтому publishedAt НЕ нужен (и может отсутствовать).
+// - Чтобы в админке показывались не documentId, а нормальные названия,
+//   мы заполняем обязательное поле title автоматически: "<Название товара> × <кол-во>".
 
 type MoySkladMeta = { href: string };
 
@@ -22,6 +28,7 @@ function getMoySkladHeaders(token: string) {
 /** UUID из meta.href (последний сегмент, без ?query/#hash) */
 function pickIdFromHref(href?: string): string | null {
   if (!href) return null;
+
   const clean = href.split("?")[0]?.split("#")[0];
   if (!clean) return null;
 
@@ -47,11 +54,9 @@ async function fetchBundleComponents(bundleMsId: string, token: string): Promise
 /**
  * Полная перезапись состава:
  * - удаляем старые строки по bundle
- * - создаём новые строки (bundle + componentProduct + quantity)
+ * - создаём новые строки (bundle + componentProduct + quantity + title)
  *
- * Важно:
- * - draftAndPublish у moysklad-bundle-item включён, поэтому ставим publishedAt,
- *   иначе записи будут в draft и не будут видны в API по умолчанию.
+ * title заполняем автоматически, чтобы в админке было читабельно.
  */
 export async function syncBundleItemsForBundle(bundleMsId: string) {
   const token = process.env.MOYSKLAD_ACCESS_TOKEN;
@@ -84,7 +89,6 @@ export async function syncBundleItemsForBundle(bundleMsId: string) {
   });
 
   // 4) Создаём новые строки
-  const nowIso = new Date().toISOString();
   let created = 0;
   let skipped = 0;
 
@@ -96,9 +100,10 @@ export async function syncBundleItemsForBundle(bundleMsId: string) {
     }
 
     // Компонент должен существовать в Strapi как moysklad-product
+    // ✅ Берём name, чтобы сформировать title
     const componentEntity = await productQuery.findOne({
       where: { moyskladId: componentMsId },
-      select: ["id"],
+      select: ["id", "name"],
     });
 
     if (!componentEntity) {
@@ -107,12 +112,18 @@ export async function syncBundleItemsForBundle(bundleMsId: string) {
       continue;
     }
 
+    // ✅ Читабельный title для админки
+    // Пример: "Гейзер ... (серебро) × 15"
+    const qty = typeof row.quantity === "number" ? row.quantity : Number(row.quantity);
+    const safeQty = Number.isFinite(qty) ? qty : 1;
+    const title = `${componentEntity.name} × ${safeQty}`;
+
     await itemQuery.create({
       data: {
+        title,
         bundle: bundleEntity.id,
         componentProduct: componentEntity.id,
-        quantity: row.quantity,
-        publishedAt: nowIso, // чтобы запись сразу была опубликована
+        quantity: safeQty,
       },
     });
 
