@@ -15,6 +15,10 @@
 // ДОБАВЛЕНО (bundle items auto-sync):
 // - После sync/products автоматически синкаем состав ДЛЯ ВСЕХ bundles, найденных в витрине
 // - Возвращаем агрегированную статистику: created/skipped/failed
+//
+// ВАЖНО ПРО СЧЁТЧИКИ:
+// - productsCount теперь считает И товары И комплекты (product + bundle)
+// - category sync больше НЕ пересчитывает счётчики (только строит дерево)
 
 import { factories } from "@strapi/strapi";
 import {
@@ -205,10 +209,19 @@ function hasCategoryAttribute(attrName: string): boolean {
 
 /**
  * Пересчёт счётчиков категорий "по дереву":
- * - direct: товары, привязанные к категории напрямую
+ * - directProducts / directBundles: сколько сущностей привязано напрямую к категории
  * - total: direct + сумма total всех дочерних
+ *
+ * Что пишем:
+ * - productsCount = totalProducts + totalBundles (единый счётчик для витрины)
+ * - если есть productsCountDirect / productsCountTotal — пишем туда тоже (единые totals)
+ * - если когда-нибудь добавишь отдельные поля (опционально), мы аккуратно их заполним:
+ *   productsCountProductsDirect/Total, productsCountBundlesDirect/Total
  */
-async function recomputeCategoryCountsForTree(directCountByCategoryId: Map<number, number>) {
+async function recomputeCategoryCountsForTree(
+  directProductsByCategoryId: Map<number, number>,
+  directBundlesByCategoryId: Map<number, number>,
+) {
   const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
   const categories = await categoryQuery.findMany({
@@ -227,37 +240,72 @@ async function recomputeCategoryCountsForTree(directCountByCategoryId: Map<numbe
     childrenByParentId.set(parentId, arr);
   }
 
-  const totalByCategoryId = new Map<number, number>();
+  const totalProductsByCategoryId = new Map<number, number>();
+  const totalBundlesByCategoryId = new Map<number, number>();
 
-  const computeTotal = (categoryId: number): number => {
-    const cached = totalByCategoryId.get(categoryId);
+  const computeTotalProducts = (categoryId: number): number => {
+    const cached = totalProductsByCategoryId.get(categoryId);
     if (cached !== undefined) return cached;
 
-    const direct = directCountByCategoryId.get(categoryId) ?? 0;
+    const direct = directProductsByCategoryId.get(categoryId) ?? 0;
     const children = childrenByParentId.get(categoryId) ?? [];
 
     let total = direct;
     for (const childId of children) {
-      total += computeTotal(childId);
+      total += computeTotalProducts(childId);
     }
 
-    totalByCategoryId.set(categoryId, total);
+    totalProductsByCategoryId.set(categoryId, total);
+    return total;
+  };
+
+  const computeTotalBundles = (categoryId: number): number => {
+    const cached = totalBundlesByCategoryId.get(categoryId);
+    if (cached !== undefined) return cached;
+
+    const direct = directBundlesByCategoryId.get(categoryId) ?? 0;
+    const children = childrenByParentId.get(categoryId) ?? [];
+
+    let total = direct;
+    for (const childId of children) {
+      total += computeTotalBundles(childId);
+    }
+
+    totalBundlesByCategoryId.set(categoryId, total);
     return total;
   };
 
   const canWriteDirect = hasCategoryAttribute("productsCountDirect");
   const canWriteTotal = hasCategoryAttribute("productsCountTotal");
 
+  // опциональные поля (если ты потом захочешь хранить раздельно)
+  const canWriteProductsDirect = hasCategoryAttribute("productsCountProductsDirect");
+  const canWriteProductsTotal = hasCategoryAttribute("productsCountProductsTotal");
+  const canWriteBundlesDirect = hasCategoryAttribute("productsCountBundlesDirect");
+  const canWriteBundlesTotal = hasCategoryAttribute("productsCountBundlesTotal");
+
   for (const c of categories) {
-    const direct = directCountByCategoryId.get(c.id) ?? 0;
-    const total = computeTotal(c.id);
+    const directProducts = directProductsByCategoryId.get(c.id) ?? 0;
+    const directBundles = directBundlesByCategoryId.get(c.id) ?? 0;
+
+    const totalProducts = computeTotalProducts(c.id);
+    const totalBundles = computeTotalBundles(c.id);
+
+    const directAll = directProducts + directBundles;
+    const totalAll = totalProducts + totalBundles;
 
     const data: Record<string, unknown> = {
-      productsCount: total,
+      productsCount: totalAll,
     };
 
-    if (canWriteDirect) data.productsCountDirect = direct;
-    if (canWriteTotal) data.productsCountTotal = total;
+    if (canWriteDirect) data.productsCountDirect = directAll;
+    if (canWriteTotal) data.productsCountTotal = totalAll;
+
+    if (canWriteProductsDirect) data.productsCountProductsDirect = directProducts;
+    if (canWriteProductsTotal) data.productsCountProductsTotal = totalProducts;
+
+    if (canWriteBundlesDirect) data.productsCountBundlesDirect = directBundles;
+    if (canWriteBundlesTotal) data.productsCountBundlesTotal = totalBundles;
 
     await categoryQuery.update({
       where: { id: c.id },
@@ -323,7 +371,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       const keepMsIds = new Set<string>(); // type=product
       const keepBundleMsIds = new Set<string>(); // type=bundle
 
-      const directCountByCategoryId = new Map<number, number>();
+      // direct counts для пересчёта category counters:
+      // считаем отдельно products и bundles, чтобы потом сложить корректно
+      const directProductsByCategoryId = new Map<number, number>();
+      const directBundlesByCategoryId = new Map<number, number>();
 
       // 3) Upsert только тех товаров, что попадают в allowed категории
       for (const p of all) {
@@ -337,7 +388,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
         keepMsIds.add(p.id);
 
-        directCountByCategoryId.set(categoryId, (directCountByCategoryId.get(categoryId) ?? 0) + 1);
+        // ✅ direct count: PRODUCT
+        directProductsByCategoryId.set(categoryId, (directProductsByCategoryId.get(categoryId) ?? 0) + 1);
 
         const existing = await productQuery.findOne({
           where: { moyskladId: p.id },
@@ -390,6 +442,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         bundlesAllowed += 1;
         keepBundleMsIds.add(b.id);
 
+        // ✅ direct count: BUNDLE
+        directBundlesByCategoryId.set(categoryId, (directBundlesByCategoryId.get(categoryId) ?? 0) + 1);
+
         const existing = await productQuery.findOne({
           where: { moyskladId: b.id },
           select: ["id"],
@@ -439,8 +494,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         where: { type: "bundle", moyskladId: { $notIn: Array.from(keepBundleMsIds) } },
       });
 
-      // 5) Пересчитываем productsCount (только по PRODUCT, bundles не считаем)
-      await recomputeCategoryCountsForTree(directCountByCategoryId);
+      // 5) Пересчитываем productsCount:
+      // ✅ ВАЖНО: считаем product + bundle (комплекты тоже входят)
+      await recomputeCategoryCountsForTree(directProductsByCategoryId, directBundlesByCategoryId);
 
       // ✅ 6) Автосинк состава для ВСЕХ bundles
       // Важно: синкаем после апсерта bundles и products, чтобы componentProduct уже существовали.
@@ -458,12 +514,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         } catch (err) {
           bundlesFailed += 1;
           // Не валим весь sync/products из-за одного проблемного комплекта.
-          // Логи будут, а фронт/ты увидите failed>0 в ответе.
           strapi.log.error(`[moysklad] bundle items sync failed: bundle=${bundleMsId} error=${String(err)}`);
         }
       }
 
-      // ✅ В sync-state пока пишем только products (тип утилиты ограничен).
       await markSyncOk("products", { products: keepMsIds.size });
 
       return {
