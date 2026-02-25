@@ -4,14 +4,17 @@
 // 2) Оставить только товары, которые попадают в уже синкнутые категории
 // 3) Сделать upsert товаров в Strapi
 // 4) Удалить товары, которых больше нет в MoySklad/в витринных категориях
-// 5) Пересчитать productsCount у категорий (aggregate по descendants, чтобы у "Шейкеры" и у ROOT
-//    считалось "всё внутри дерева")
+// 5) Пересчитать productsCount у категорий (aggregate по descendants)
 // 6) Вести статусы синка + lock, чтобы синк не запускался параллельно
 //
-// ДОБАВЛЕНО (шаг по bundle):
+// ДОБАВЛЕНО (bundle):
 // - Тянем bundle из MoySklad отдельно
 // - Апсертим bundle в ту же таблицу moysklad-product с type="bundle"
 // - Удаляем отдельно type=product и type=bundle (чтобы не снести друг друга)
+//
+// ДОБАВЛЕНО (bundle items auto-sync):
+// - После sync/products автоматически синкаем состав ДЛЯ ВСЕХ bundles, найденных в витрине
+// - Возвращаем агрегированную статистику: created/skipped/failed
 
 import { factories } from "@strapi/strapi";
 import {
@@ -21,6 +24,9 @@ import {
   markSyncOk,
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
+
+// ✅ ВАЖНО: путь из moysklad-product/services -> api -> moysklad-bundle-item/services/sync
+import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
 
 type MoySkladMeta = {
   href: string;
@@ -55,7 +61,6 @@ type MoySkladProduct = {
   volume?: number | null;
 };
 
-// Bundle в MoySklad по полям очень похож на Product для наших целей
 type MoySkladBundle = {
   id: string;
   name: string;
@@ -131,7 +136,6 @@ function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): num
 
 /**
  * Type-guard для ответа MoySklad product-list.
- * Нужен, потому что в Node/undici res.json() часто typed как unknown.
  */
 function isMoySkladListResponse(data: unknown): data is MoySkladListResponse {
   if (!data || typeof data !== "object") return false;
@@ -145,8 +149,6 @@ function isMoySkladListResponse(data: unknown): data is MoySkladListResponse {
 
 /**
  * Type-guard для ответа MoySklad bundle-list.
- * Он такой же по форме: { rows: [], meta: {} }
- * Делаем отдельной функцией, чтобы в ошибках было ясно, что проверяли.
  */
 function isMoySkladBundleListResponse(data: unknown): data is MoySkladBundleListResponse {
   if (!data || typeof data !== "object") return false;
@@ -169,7 +171,6 @@ async function fetchJson(url: string, token: string): Promise<MoySkladListRespon
   const data = (await res.json()) as unknown;
 
   if (!isMoySkladListResponse(data)) {
-    // Чтобы быстро увидеть реальный ответ, который прилетел
     throw new Error(`Unexpected MoySklad response shape (product): ${JSON.stringify(data).slice(0, 500)}`);
   }
 
@@ -187,7 +188,6 @@ async function fetchBundleJson(url: string, token: string): Promise<MoySkladBund
   const data = (await res.json()) as unknown;
 
   if (!isMoySkladBundleListResponse(data)) {
-    // Чтобы быстро увидеть реальный ответ, который прилетел
     throw new Error(`Unexpected MoySklad response shape (bundle): ${JSON.stringify(data).slice(0, 500)}`);
   }
 
@@ -205,24 +205,18 @@ function hasCategoryAttribute(attrName: string): boolean {
 
 /**
  * Пересчёт счётчиков категорий "по дереву":
- * - direct: товары, привязанные к категории напрямую (children не включаем)
+ * - direct: товары, привязанные к категории напрямую
  * - total: direct + сумма total всех дочерних
- *
- * По умолчанию:
- * - total пишем в productsCount (чтобы фронт/текущие запросы сразу показывали aggregate)
- * - если в модели есть productsCountDirect / productsCountTotal — пишем и туда тоже.
  */
 async function recomputeCategoryCountsForTree(directCountByCategoryId: Map<number, number>) {
   const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-  // Берём дерево: id + parent
   const categories = await categoryQuery.findMany({
     select: ["id"],
     populate: { parent: { select: ["id"] } },
     limit: 100000,
   });
 
-  // parentId -> childIds[]
   const childrenByParentId = new Map<number, number[]>();
   for (const c of categories) {
     const parentId = c.parent?.id;
@@ -254,7 +248,6 @@ async function recomputeCategoryCountsForTree(directCountByCategoryId: Map<numbe
   const canWriteDirect = hasCategoryAttribute("productsCountDirect");
   const canWriteTotal = hasCategoryAttribute("productsCountTotal");
 
-  // Обновляем все категории: productsCount = total (aggregate)
   for (const c of categories) {
     const direct = directCountByCategoryId.get(c.id) ?? 0;
     const total = computeTotal(c.id);
@@ -276,10 +269,6 @@ async function recomputeCategoryCountsForTree(directCountByCategoryId: Map<numbe
 export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
   /**
    * Полный синк товаров + комплектов (bundle).
-   * - берём только позиции из синкнутых категорий
-   * - price     = "Цена с сайта"
-   * - priceOld  = "Цена продажи"
-   * - пересчитываем productsCount у категорий (aggregate по дереву)
    */
   async syncAll() {
     await acquireMoySkladSyncLock("products");
@@ -331,13 +320,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       const nowIso = new Date().toISOString();
 
-      // keep для обычных товаров (type=product)
-      const keepMsIds = new Set<string>();
+      const keepMsIds = new Set<string>(); // type=product
+      const keepBundleMsIds = new Set<string>(); // type=bundle
 
-      // keep для комплектов (type=bundle)
-      const keepBundleMsIds = new Set<string>();
-
-      // direct count (только прямые товары, без children)
       const directCountByCategoryId = new Map<number, number>();
 
       // 3) Upsert только тех товаров, что попадают в allowed категории
@@ -345,7 +330,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         const categoryMsId = pickIdFromHref(p.productFolder?.meta?.href);
         if (!categoryMsId) continue;
 
-        // Жёстко отсекаем товары не из витринных категорий
         if (!allowedCategoryMsIds.has(categoryMsId)) continue;
 
         const categoryId = categoryIdByMsId.get(categoryMsId);
@@ -353,7 +337,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
         keepMsIds.add(p.id);
 
-        // Накапливаем direct-count сразу (без N+1 count запросов)
         directCountByCategoryId.set(categoryId, (directCountByCategoryId.get(categoryId) ?? 0) + 1);
 
         const existing = await productQuery.findOne({
@@ -362,7 +345,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         });
 
         const payload = {
-          // Обычный товар из /entity/product
           type: "product",
 
           name: p.name,
@@ -380,7 +362,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
           uom: p.uom?.name ?? null,
 
-          // В schema это decimal → оставляем только number, иначе null
           weight: typeof p.weight === "number" ? p.weight : null,
           volume: typeof p.volume === "number" ? p.volume : null,
 
@@ -388,25 +369,19 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         };
 
         if (existing) {
-          await productQuery.update({
-            where: { id: existing.id },
-            data: payload,
-          });
+          await productQuery.update({ where: { id: existing.id }, data: payload });
         } else {
-          await productQuery.create({
-            data: payload,
-          });
+          await productQuery.create({ data: payload });
         }
       }
 
-      // 3.1) Апсерт bundle (type=bundle) в ту же таблицу moysklad-product
+      // 3.1) Апсерт bundle (type=bundle)
       let bundlesAllowed = 0;
 
       for (const b of allBundles) {
         const categoryMsId = pickIdFromHref(b.productFolder?.meta?.href);
         if (!categoryMsId) continue;
 
-        // bundle тоже фильтруем по витринным категориям
         if (!allowedCategoryMsIds.has(categoryMsId)) continue;
 
         const categoryId = categoryIdByMsId.get(categoryMsId);
@@ -444,52 +419,64 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         };
 
         if (existing) {
-          await productQuery.update({
-            where: { id: existing.id },
-            data: payload,
-          });
+          await productQuery.update({ where: { id: existing.id }, data: payload });
         } else {
-          await productQuery.create({
-            data: payload,
-          });
+          await productQuery.create({ data: payload });
         }
       }
 
-      // Логи, чтобы глазами проверить, что bundle реально есть и попадают в витрину
       strapi.log.info(`[moysklad] products total fetched: ${all.length}`);
       strapi.log.info(`[moysklad] bundles total fetched: ${allBundles.length}`);
       strapi.log.info(`[moysklad] bundles allowed by category: ${bundlesAllowed}`);
 
-      // 4) Удаляем только products, которые больше не должны быть в витрине
+      // 4) Удаляем только products
       await productQuery.deleteMany({
-        where: {
-          type: "product",
-          moyskladId: { $notIn: Array.from(keepMsIds) },
-        },
+        where: { type: "product", moyskladId: { $notIn: Array.from(keepMsIds) } },
       });
 
-      // 4.1) Удаляем только bundles, которые больше не должны быть в витрине
+      // 4.1) Удаляем только bundles
       await productQuery.deleteMany({
-        where: {
-          type: "bundle",
-          moyskladId: { $notIn: Array.from(keepBundleMsIds) },
-        },
+        where: { type: "bundle", moyskladId: { $notIn: Array.from(keepBundleMsIds) } },
       });
 
-      /**
-       * 5) Пересчитываем productsCount "внутри дерева"
-       * - directCount мы уже посчитали при апсерте PRODUCT
-       * - totalCount считаем по parent/children в категориях
-       *
-       * Важно: bundles в productsCount сейчас не учитываем (это именно "кол-во товаров").
-       */
+      // 5) Пересчитываем productsCount (только по PRODUCT, bundles не считаем)
       await recomputeCategoryCountsForTree(directCountByCategoryId);
 
+      // ✅ 6) Автосинк состава для ВСЕХ bundles
+      // Важно: синкаем после апсерта bundles и products, чтобы componentProduct уже существовали.
+      let bundleItemsCreatedTotal = 0;
+      let bundleItemsSkippedTotal = 0;
+      let bundlesProcessed = 0;
+      let bundlesFailed = 0;
+
+      for (const bundleMsId of keepBundleMsIds) {
+        try {
+          const r = await syncBundleItemsForBundle(bundleMsId);
+          bundleItemsCreatedTotal += r.created;
+          bundleItemsSkippedTotal += r.skipped;
+          bundlesProcessed += 1;
+        } catch (err) {
+          bundlesFailed += 1;
+          // Не валим весь sync/products из-за одного проблемного комплекта.
+          // Логи будут, а фронт/ты увидите failed>0 в ответе.
+          strapi.log.error(`[moysklad] bundle items sync failed: bundle=${bundleMsId} error=${String(err)}`);
+        }
+      }
+
       // ✅ В sync-state пока пишем только products (тип утилиты ограничен).
-      // bundles вернём клиенту через return ниже.
       await markSyncOk("products", { products: keepMsIds.size });
-			
-      return { ok: true, total: keepMsIds.size, bundles: keepBundleMsIds.size };
+
+      return {
+        ok: true,
+        total: keepMsIds.size,
+        bundles: keepBundleMsIds.size,
+        bundleItems: {
+          bundlesProcessed,
+          created: bundleItemsCreatedTotal,
+          skipped: bundleItemsSkippedTotal,
+          failed: bundlesFailed,
+        },
+      };
     } catch (e) {
       await markSyncError("products", e);
       throw e;
