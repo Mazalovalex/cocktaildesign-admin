@@ -1,6 +1,5 @@
 // backend/src/api/moysklad-bundle-item/services/sync.ts
 // Задача: синкнуть состав ОДНОГО комплекта (bundle) в Strapi таблицу moysklad-bundle-item.
-//
 // Важно по draft/publish:
 // - В твоём schema для moysklad-bundle-item сейчас draftAndPublish = false,
 //   поэтому publishedAt НЕ нужен (и может отсутствовать).
