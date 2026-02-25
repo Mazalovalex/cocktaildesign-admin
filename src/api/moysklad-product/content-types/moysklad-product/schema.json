@@ -83,6 +83,18 @@
         "product",
         "bundle"
       ]
+    },
+    "bundleComponentItems": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::moysklad-bundle-item.moysklad-bundle-item",
+      "mappedBy": "componentProduct"
+    },
+    "bundleItems": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::moysklad-bundle-item.moysklad-bundle-item",
+      "mappedBy": "bundle"
     }
   }
 }

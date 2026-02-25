@@ -1,0 +1,33 @@
+{
+  "kind": "collectionType",
+  "collectionName": "moysklad_bundle_items",
+  "info": {
+    "singularName": "moysklad-bundle-item",
+    "pluralName": "moysklad-bundle-items",
+    "displayName": "Состав комплекта"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "quantity": {
+      "type": "decimal",
+      "required": true,
+      "default": 1,
+      "min": 0
+    },
+    "componentProduct": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::moysklad-product.moysklad-product",
+      "inversedBy": "bundleComponentItems"
+    },
+    "bundle": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::moysklad-product.moysklad-product",
+      "inversedBy": "bundleItems"
+    }
+  }
+}

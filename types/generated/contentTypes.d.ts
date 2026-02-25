@@ -520,6 +520,51 @@ export interface ApiKnowledgeItemKnowledgeItem
   };
 }
 
+export interface ApiMoyskladBundleItemMoyskladBundleItem
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'moysklad_bundle_items';
+  info: {
+    displayName: '\u0421\u043E\u0441\u0442\u0430\u0432 \u043A\u043E\u043C\u043F\u043B\u0435\u043A\u0442\u0430';
+    pluralName: 'moysklad-bundle-items';
+    singularName: 'moysklad-bundle-item';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    bundle: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::moysklad-product.moysklad-product'
+    >;
+    componentProduct: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::moysklad-product.moysklad-product'
+    >;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::moysklad-bundle-item.moysklad-bundle-item'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    quantity: Schema.Attribute.Decimal &
+      Schema.Attribute.Required &
+      Schema.Attribute.SetMinMax<
+        {
+          min: 0;
+        },
+        number
+      > &
+      Schema.Attribute.DefaultTo<1>;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiMoyskladCategoryMoyskladCategory
   extends Struct.CollectionTypeSchema {
   collectionName: 'moysklad_categories';
@@ -589,6 +634,14 @@ export interface ApiMoyskladProductMoyskladProduct
     draftAndPublish: false;
   };
   attributes: {
+    bundleComponentItems: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::moysklad-bundle-item.moysklad-bundle-item'
+    >;
+    bundleItems: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::moysklad-bundle-item.moysklad-bundle-item'
+    >;
     catalog_collections: Schema.Attribute.Relation<
       'manyToMany',
       'api::catalog-collection.catalog-collection'
@@ -1146,6 +1199,7 @@ declare module '@strapi/strapi' {
       'admin::user': AdminUser;
       'api::catalog-collection.catalog-collection': ApiCatalogCollectionCatalogCollection;
       'api::knowledge-item.knowledge-item': ApiKnowledgeItemKnowledgeItem;
+      'api::moysklad-bundle-item.moysklad-bundle-item': ApiMoyskladBundleItemMoyskladBundleItem;
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;
       'plugin::content-releases.release': PluginContentReleasesRelease;
