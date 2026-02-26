@@ -729,7 +729,7 @@ export interface ApiMoyskladVariantMoyskladVariant
     singularName: 'moysklad-variant';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     characteristics: Schema.Attribute.JSON;
