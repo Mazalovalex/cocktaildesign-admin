@@ -101,6 +101,29 @@ type MoySkladBundleListResponse = {
   };
 };
 
+/**
+ * Payload из webhook fetchByHref может быть "не строгим":
+ * - id обычно есть, но подстрахуемся
+ * - meta.href есть практически всегда
+ */
+type MoySkladWebhookProduct = {
+  id?: string;
+  name?: string;
+  code?: string;
+  updated?: string;
+
+  meta?: { href?: string };
+
+  productFolder?: { meta?: { href?: string } };
+
+  salePrices?: MoySkladSalePrice[];
+
+  uom?: { name?: string };
+
+  weight?: number | null;
+  volume?: number | null;
+};
+
 function getMoySkladHeaders(token: string) {
   return {
     Authorization: `Bearer ${token}`,
@@ -315,6 +338,92 @@ async function recomputeCategoryCountsForTree(
 }
 
 export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
+  /**
+   * Webhook: upsert ОДНОГО product по payload из fetchByHref(href).
+   * Важно: не трогаем bundles здесь (вебхук сейчас шлёт type=product).
+   */
+  async syncOneFromWebhook(entity: MoySkladWebhookProduct) {
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+    const moyskladId = entity.id ?? pickIdFromHref(entity.meta?.href);
+    const href = entity.meta?.href ?? null;
+
+    if (!moyskladId || !href) {
+      strapi.log.warn("[moysklad-product] webhook skipped: no moyskladId/href");
+      return;
+    }
+
+    const categoryMsId = pickIdFromHref(entity.productFolder?.meta?.href);
+    if (!categoryMsId) {
+      strapi.log.warn(`[moysklad-product] webhook skipped: no category href for product=${moyskladId}`);
+      return;
+    }
+
+    const category = await categoryQuery.findOne({
+      where: { moyskladId: categoryMsId },
+      select: ["id"],
+    });
+
+    if (!category) {
+      // это нормальная ситуация: если category sync ещё не догнал
+      strapi.log.warn(
+        `[moysklad-product] webhook skipped: category not found msId=${categoryMsId} product=${moyskladId}`,
+      );
+      return;
+    }
+
+    const existing = await productQuery.findOne({
+      where: { moyskladId },
+      select: ["id"],
+    });
+
+    const nowIso = new Date().toISOString();
+
+    const payload = {
+      type: "product",
+
+      name: entity.name ?? "",
+      displayTitle: entity.name ?? "",
+
+      moyskladId,
+      href,
+
+      code: entity.code ?? null,
+      updated: entity.updated ?? null,
+
+      category: category.id,
+
+      price: priceByName(entity.salePrices, "Цена с сайта"),
+      priceOld: priceByName(entity.salePrices, "Цена продажи"),
+
+      uom: entity.uom?.name ?? null,
+      weight: typeof entity.weight === "number" ? entity.weight : null,
+      volume: typeof entity.volume === "number" ? entity.volume : null,
+
+      publishedAt: nowIso,
+    };
+
+    if (existing) {
+      await productQuery.update({ where: { id: existing.id }, data: payload });
+      strapi.log.info(`[moysklad-product] updated: ${moyskladId}`);
+      return;
+    }
+
+    await productQuery.create({ data: payload });
+    strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
+  },
+
+  /**
+   * Webhook: delete по moyskladId (без fetchByHref)
+   */
+  async deleteOneFromWebhook(moyskladId: string) {
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    await productQuery.deleteMany({ where: { moyskladId } });
+    strapi.log.info(`[moysklad-product] deleted: ${moyskladId}`);
+  },
+
   /**
    * Полный синк товаров + комплектов (bundle).
    */
