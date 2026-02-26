@@ -53,6 +53,15 @@ async function processEvent(event: WebhookEvent) {
       return;
     }
 
+    // ✅ bundle удаляем из той же таблицы, что и product (moysklad-product)
+    if (type === "bundle") {
+      await strapi.db.query("api::moysklad-product.moysklad-product").deleteMany({
+        where: { moyskladId },
+      });
+      strapi.log.info(`[moysklad-webhook] deleted bundle ${moyskladId}`);
+      return;
+    }
+
     if (type === "productfolder") {
       await strapi.db.query("api::moysklad-category.moysklad-category").deleteMany({
         where: { moyskladId },
@@ -83,6 +92,13 @@ async function processEvent(event: WebhookEvent) {
   }
 
   if (type === "product") {
+    await strapi.service("api::moysklad-product.moysklad-product").syncOneFromWebhook(entity);
+    strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
+    return;
+  }
+
+  // ✅ bundle синкаем через moysklad-product (пока используем общий syncOneFromWebhook)
+  if (type === "bundle") {
     await strapi.service("api::moysklad-product.moysklad-product").syncOneFromWebhook(entity);
     strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
     return;
