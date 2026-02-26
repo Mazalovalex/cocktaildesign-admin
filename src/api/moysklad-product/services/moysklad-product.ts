@@ -419,6 +419,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
    * Отличия от product:
    * - type всегда "bundle"
    * - логи маркируем как bundle (чтобы отличать в pm2 logs)
+   *
+   * ДОБАВЛЕНО: после апсерта синкаем состав комплекта (bundle items).
+   * Важно: ошибки синка состава НЕ валят webhook, только логируем.
    */
   async syncOneBundleFromWebhook(entity: MoySkladWebhookProduct) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
@@ -481,14 +484,24 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       publishedAt: nowIso,
     };
 
+    // 1) upsert bundle
     if (existing) {
       await productQuery.update({ where: { id: existing.id }, data: payload });
       strapi.log.info(`[moysklad-product] updated bundle: ${moyskladId}`);
-      return;
+    } else {
+      await productQuery.create({ data: payload });
+      strapi.log.info(`[moysklad-product] created bundle: ${moyskladId}`);
     }
 
-    await productQuery.create({ data: payload });
-    strapi.log.info(`[moysklad-product] created bundle: ${moyskladId}`);
+    // 2) auto-sync состава (bundle items)
+    try {
+      const r = await syncBundleItemsForBundle(moyskladId);
+      strapi.log.info(
+        `[moysklad-product] bundle items synced: bundle=${moyskladId} created=${r.created} skipped=${r.skipped}`,
+      );
+    } catch (err) {
+      strapi.log.error(`[moysklad-product] bundle items sync failed: bundle=${moyskladId} error=${String(err)}`);
+    }
   },
 
   /**
