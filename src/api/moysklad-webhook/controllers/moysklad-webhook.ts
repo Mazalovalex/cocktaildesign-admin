@@ -1,4 +1,4 @@
-// backend/src/api/moysklad-webhook/controllers/moysklad-webhook.ts
+// apps/strapi/src/api/moysklad-webhook/controllers/moysklad-webhook.ts
 import type { Context } from "koa";
 
 type WebhookEvent = {
@@ -11,10 +11,20 @@ function getStringQuery(ctx: Context, key: string): string | null {
   return typeof v === "string" ? v : null;
 }
 
+/**
+ * Достаём UUID из href.
+ * Важно: режем ?query и #hash, чтобы не получить кривой ID.
+ */
 function pickIdFromHref(href?: string): string | null {
   if (!href) return null;
-  const parts = href.split("/");
-  return parts[parts.length - 1] ?? null;
+
+  const clean = href.split("?")[0]?.split("#")[0];
+  if (!clean) return null;
+
+  const parts = clean.split("/");
+  const last = parts[parts.length - 1];
+
+  return last ? last : null;
 }
 
 async function processEvent(event: WebhookEvent) {
@@ -51,7 +61,6 @@ async function processEvent(event: WebhookEvent) {
       return;
     }
 
-    // ✅ variant DELETE
     if (type === "variant") {
       await strapi.db.query("api::moysklad-variant.moysklad-variant").deleteMany({
         where: { moyskladId },
@@ -79,7 +88,6 @@ async function processEvent(event: WebhookEvent) {
     return;
   }
 
-  // ✅ variant CREATE/UPDATE
   if (type === "variant") {
     await strapi.service("api::moysklad-variant.moysklad-variant").syncOneFromWebhook(entity);
     strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
@@ -105,24 +113,26 @@ export default {
       return;
     }
 
-    const events = (ctx.request.body as any)?.events as WebhookEvent[] | undefined;
-    if (!events?.length) {
+    const body = ctx.request.body as unknown;
+    const events = (body as { events?: unknown })?.events;
+
+    if (!Array.isArray(events) || events.length === 0) {
       ctx.status = 400;
       ctx.body = { ok: false, error: "Missing events[]" };
       return;
     }
 
-    // ✅ отвечаем быстро, обработа асинхронно
+    // ✅ отвечаем быстро, обработка асинхронно
     ctx.status = 204;
     ctx.body = null;
 
     void (async () => {
-      try {
-        for (const e of events) {
+      for (const e of events as WebhookEvent[]) {
+        try {
           await processEvent(e);
+        } catch (err) {
+          strapi.log.error("[moysklad-webhook] processing failed (event)", err as Error);
         }
-      } catch (err) {
-        strapi.log.error("[moysklad-webhook] processing failed", err as Error);
       }
     })();
   },
