@@ -54,9 +54,10 @@ async function processEvent(event: WebhookEvent) {
     }
 
     // ✅ bundle удаляем из той же таблицы, что и product (moysklad-product)
+    // ВАЖНО: удаляем ТОЛЬКО type="bundle", чтобы случайно не снести product.
     if (type === "bundle") {
       await strapi.db.query("api::moysklad-product.moysklad-product").deleteMany({
-        where: { moyskladId },
+        where: { moyskladId, type: "bundle" },
       });
       strapi.log.info(`[moysklad-webhook] deleted bundle ${moyskladId}`);
       return;
