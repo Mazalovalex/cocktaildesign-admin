@@ -711,8 +711,56 @@ export interface ApiMoyskladProductMoyskladProduct
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    variants: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::moysklad-variant.moysklad-variant'
+    >;
     volume: Schema.Attribute.Decimal;
     weight: Schema.Attribute.Decimal;
+  };
+}
+
+export interface ApiMoyskladVariantMoyskladVariant
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'moysklad_variants';
+  info: {
+    displayName: '\u0412\u0430\u0440\u0438\u0430\u043D\u0442\u044B';
+    pluralName: 'moysklad-variants';
+    singularName: 'moysklad-variant';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    characteristics: Schema.Attribute.JSON;
+    code: Schema.Attribute.String;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    href: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::moysklad-variant.moysklad-variant'
+    > &
+      Schema.Attribute.Private;
+    moyskladId: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    name: Schema.Attribute.String & Schema.Attribute.Required;
+    price: Schema.Attribute.Integer;
+    priceOld: Schema.Attribute.Integer;
+    product: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::moysklad-product.moysklad-product'
+    >;
+    publishedAt: Schema.Attribute.DateTime;
+    updated: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
   };
 }
 
@@ -1232,6 +1280,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-bundle-item.moysklad-bundle-item': ApiMoyskladBundleItemMoyskladBundleItem;
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;
+      'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
       'plugin::content-releases.release': PluginContentReleasesRelease;
       'plugin::content-releases.release-action': PluginContentReleasesReleaseAction;
       'plugin::i18n.locale': PluginI18NLocale;

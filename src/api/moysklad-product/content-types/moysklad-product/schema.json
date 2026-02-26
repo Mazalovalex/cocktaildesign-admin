@@ -95,6 +95,12 @@
       "relation": "oneToMany",
       "target": "api::moysklad-bundle-item.moysklad-bundle-item",
       "mappedBy": "bundle"
+    },
+    "variants": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::moysklad-variant.moysklad-variant",
+      "mappedBy": "product"
     }
   }
 }
