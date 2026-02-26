@@ -97,9 +97,9 @@ async function processEvent(event: WebhookEvent) {
     return;
   }
 
-  // ✅ bundle синкаем через moysklad-product (пока используем общий syncOneFromWebhook)
+  // ✅ bundle синкаем через moysklad-product (bundle-метод)
   if (type === "bundle") {
-    await strapi.service("api::moysklad-product.moysklad-product").syncOneFromWebhook(entity);
+    await strapi.service("api::moysklad-product.moysklad-product").syncOneBundleFromWebhook(entity);
     strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
     return;
   }
