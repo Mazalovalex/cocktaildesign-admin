@@ -231,6 +231,8 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
 
       price: priceByName(v.salePrices, "Цена с сайта"),
       priceOld: priceByName(v.salePrices, "Цена продажи"),
+
+      publishedAt: new Date().toISOString(),
     };
 
     if (existing) {
