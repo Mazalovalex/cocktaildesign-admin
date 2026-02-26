@@ -1,3 +1,4 @@
+// backend/src/api/moysklad-webhook/services/moysklad-webhook.ts
 type MoySkladMeta = { href: string; type: string; mediaType?: string };
 
 function getMoySkladHeaders(token: string) {

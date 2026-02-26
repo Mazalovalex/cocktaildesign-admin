@@ -1,3 +1,4 @@
+// backend/src/api/moysklad-webhook/controllers/moysklad-webhook.ts
 import type { Context } from "koa";
 
 type WebhookEvent = {
@@ -50,6 +51,15 @@ async function processEvent(event: WebhookEvent) {
       return;
     }
 
+    // ✅ variant DELETE
+    if (type === "variant") {
+      await strapi.db.query("api::moysklad-variant.moysklad-variant").deleteMany({
+        where: { moyskladId },
+      });
+      strapi.log.info(`[moysklad-webhook] deleted variant ${moyskladId}`);
+      return;
+    }
+
     strapi.log.info(`[moysklad-webhook] delete skipped: type=${type}`);
     return;
   }
@@ -65,6 +75,13 @@ async function processEvent(event: WebhookEvent) {
 
   if (type === "product") {
     await strapi.service("api::moysklad-product.moysklad-product").syncOneFromWebhook(entity);
+    strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
+    return;
+  }
+
+  // ✅ variant CREATE/UPDATE
+  if (type === "variant") {
+    await strapi.service("api::moysklad-variant.moysklad-variant").syncOneFromWebhook(entity);
     strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
     return;
   }
