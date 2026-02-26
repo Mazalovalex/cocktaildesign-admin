@@ -1,4 +1,18 @@
-// src/api/moysklad-variant/services/sync.ts
+// backend/src/api/moysklad-variant/services/sync.ts
+//
+// Задача файла:
+// 1) Забрать варианты (variant) из MoySklad (пагинацией)
+// 2) Найти соответствующий product в Strapi по moyskladId (из v.product.meta.href)
+// 3) Сделать upsert variants в Strapi
+// 4) Удалить variants, которых больше нет в MoySklad
+//
+// Важно:
+// - Этот синк предполагает, что sync/products уже выполнен.
+// - Если product не найден — variant пропускаем (skippedNoProduct).
+//
+// Надёжность сети:
+// - fetch в Node может падать по таймауту подключения (UND_ERR_CONNECT_TIMEOUT)
+// - добавлен retry + увеличенный timeout через AbortController
 
 type MoySkladMeta = { href: string };
 
@@ -40,6 +54,10 @@ function getMoySkladHeaders(token: string) {
   } as const;
 }
 
+/**
+ * Достаём UUID из href.
+ * Важно: режем ?query и #hash, чтобы не получить кривой ID.
+ */
 function pickIdFromHref(href?: string): string | null {
   if (!href) return null;
 
@@ -52,13 +70,17 @@ function pickIdFromHref(href?: string): string | null {
   return last ? last : null;
 }
 
+/**
+ * Цена из salePrices по точному имени типа цены.
+ * MoySklad хранит value в копейках.
+ */
 function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
   if (!prices?.length) return null;
 
   const found = prices.find((p) => p.priceType?.name === name);
   if (!found) return null;
 
-  // как и в товарах: кладём рубли integer
+  // Как и в товарах: кладём рубли integer
   return Math.round(found.value / 100);
 }
 
@@ -72,8 +94,60 @@ function isMoySkladVariantListResponse(data: unknown): data is MoySkladVariantLi
   return hasRows && hasMeta;
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableFetchError(err: unknown): boolean {
+  // undici кладёт код в cause.code
+  const e = err as { cause?: { code?: string } };
+  const code = e?.cause?.code;
+
+  return code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_SOCKET" || code === "UND_ERR_HEADERS_TIMEOUT";
+}
+
+/**
+ * fetch с таймаутом и retry на сетевые ошибки.
+ * Не ретраим 4xx/5xx ответы MoySklad — это "настоящие" ошибки.
+ */
+async function fetchWithRetry(url: string, token: string): Promise<Response> {
+  const maxAttempts = 4; // 1 + 3 повтора
+  const timeoutMs = 30_000;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), timeoutMs);
+
+      try {
+        const res = await fetch(url, {
+          headers: getMoySkladHeaders(token),
+          signal: ac.signal,
+        });
+
+        return res;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      const retryable = isRetryableFetchError(err);
+
+      if (retryable && attempt < maxAttempts) {
+        const backoffMs = 500 * attempt; // 500ms, 1000ms, 1500ms
+        strapi.log.warn(`[moysklad] fetch retry: attempt=${attempt}/${maxAttempts} backoff=${backoffMs}ms url=${url}`);
+        await sleep(backoffMs);
+        continue;
+      }
+
+      throw err;
+    }
+  }
+
+  throw new Error("fetchWithRetry: exhausted");
+}
+
 async function fetchVariantJson(url: string, token: string): Promise<MoySkladVariantListResponse> {
-  const res = await fetch(url, { headers: getMoySkladHeaders(token) });
+  const res = await fetchWithRetry(url, token);
 
   if (!res.ok) {
     const text = await res.text();
@@ -102,6 +176,7 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
 
   const keepVariantMsIds = new Set<string>();
 
+  // 1) Забираем всё из MoySklad (пагинация)
   const all: MoySkladVariant[] = [];
   let offset = 0;
 
@@ -115,6 +190,7 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
     offset += 100;
   }
 
+  // 2) Upsert
   let upserted = 0;
   let skippedNoProduct = 0;
 
@@ -155,8 +231,6 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
 
       price: priceByName(v.salePrices, "Цена с сайта"),
       priceOld: priceByName(v.salePrices, "Цена продажи"),
-
-      // publishedAt не трогаем (у тебя draftAndPublish=false обычно)
     };
 
     if (existing) {
@@ -168,7 +242,7 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
     upserted += 1;
   }
 
-  // Чистка: удаляем variants которых больше нет в МС
+  // 3) Чистка: удаляем variants, которых больше нет в МС
   await variantQuery.deleteMany({
     where: { moyskladId: { $notIn: Array.from(keepVariantMsIds) } },
   });
