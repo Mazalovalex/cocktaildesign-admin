@@ -19,6 +19,10 @@
 // ВАЖНО ПРО СЧЁТЧИКИ:
 // - productsCount теперь считает И товары И комплекты (product + bundle)
 // - category sync больше НЕ пересчитывает счётчики (только строит дерево)
+//
+// ДОБАВЛЕНО (counts after webhook):
+// - После webhook-upsert/delete пересчитываем productsCount локально (ТОЛЬКО по БД Strapi)
+// - Никаких запросов в MoySklad для этого не делаем
 
 import { factories } from "@strapi/strapi";
 import {
@@ -337,6 +341,45 @@ async function recomputeCategoryCountsForTree(
   }
 }
 
+/**
+ * Локальный пересчёт счётчиков (ТОЛЬКО по БД Strapi).
+ * Никаких запросов в MoySklad.
+ *
+ * Алгоритм:
+ * 1) Берём все products/bundles из таблицы moysklad-product
+ * 2) Считаем directProductsByCategoryId и directBundlesByCategoryId
+ * 3) Прогоняем дерево категорий через recomputeCategoryCountsForTree(...)
+ */
+async function recomputeCategoryCountsFromDb() {
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+  const rows = await productQuery.findMany({
+    select: ["type"],
+    populate: { category: { select: ["id"] } },
+    limit: 200000,
+  });
+
+  const directProductsByCategoryId = new Map<number, number>();
+  const directBundlesByCategoryId = new Map<number, number>();
+
+  for (const row of rows as Array<{ type?: unknown; category?: { id?: number } | null }>) {
+    const categoryId = row.category?.id;
+    if (!categoryId) continue;
+
+    if (row.type === "product") {
+      directProductsByCategoryId.set(categoryId, (directProductsByCategoryId.get(categoryId) ?? 0) + 1);
+      continue;
+    }
+
+    if (row.type === "bundle") {
+      directBundlesByCategoryId.set(categoryId, (directBundlesByCategoryId.get(categoryId) ?? 0) + 1);
+      continue;
+    }
+  }
+
+  await recomputeCategoryCountsForTree(directProductsByCategoryId, directBundlesByCategoryId);
+}
+
 export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
   /**
    * Webhook: upsert ОДНОГО product по payload из fetchByHref(href).
@@ -407,11 +450,14 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     if (existing) {
       await productQuery.update({ where: { id: existing.id }, data: payload });
       strapi.log.info(`[moysklad-product] updated: ${moyskladId}`);
-      return;
+    } else {
+      await productQuery.create({ data: payload });
+      strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
     }
 
-    await productQuery.create({ data: payload });
-    strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
+    // ✅ пересчёт счётчиков локально (без MoySklad)
+    await recomputeCategoryCountsFromDb();
+    strapi.log.info("[moysklad-product] counts recomputed (after product webhook)");
   },
 
   /**
@@ -502,6 +548,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     } catch (err) {
       strapi.log.error(`[moysklad-product] bundle items sync failed: bundle=${moyskladId} error=${String(err)}`);
     }
+
+    // ✅ пересчёт счётчиков локально (без MoySklad)
+    await recomputeCategoryCountsFromDb();
+    strapi.log.info("[moysklad-product] counts recomputed (after bundle webhook)");
   },
 
   /**
@@ -512,6 +562,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     await productQuery.deleteMany({ where: { moyskladId } });
     strapi.log.info(`[moysklad-product] deleted: ${moyskladId}`);
+
+    // ✅ пересчёт счётчиков локально (без MoySklad)
+    await recomputeCategoryCountsFromDb();
+    strapi.log.info("[moysklad-product] counts recomputed (after delete webhook)");
   },
 
   /**
