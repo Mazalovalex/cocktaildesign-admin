@@ -8,9 +8,14 @@ const config: Core.Config.Middlewares = [
   {
     name: "strapi::cors",
     config: {
-      origin: ["https://cocktaildesign.vercel.app", "https://new.cocktaildesign.ru", "https://cocktaildesign.ru"],
+      origin: [
+        "https://cocktaildesign.vercel.app",
+        "https://new.cocktaildesign.ru",
+        "https://cocktaildesign.ru",
+        "https://www.cocktaildesign.ru",
+      ],
       credentials: true,
-      headers: ["Content-Type", "Authorization", "Origin", "Accept"],
+      headers: "*",
       methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
     },
   },
