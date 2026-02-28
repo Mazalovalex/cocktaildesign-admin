@@ -8,8 +8,6 @@ function isSyncLockError(err: unknown): boolean {
 }
 
 function toSafeCount(value: unknown): number {
-  // Приводим счётчик к корректному числу:
-  // - null/undefined/NaN/отрицательные -> 0
   if (typeof value !== "number") return 0;
   if (!Number.isFinite(value)) return 0;
   if (value <= 0) return 0;
@@ -19,13 +17,64 @@ function toSafeCount(value: unknown): number {
 function toSafeLimit(value: unknown, fallback = 50): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(n, 100); // защита от случайных "limit=100000"
+  return Math.min(n, 100);
 }
 
 function toSafeOffset(value: unknown): number {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return n;
+}
+
+type CategoryRow = { id: number };
+type ProductRow = {
+  id: number;
+  name?: string | null;
+  moyskladId?: string | null;
+  price?: number | null;
+  image?: unknown;
+};
+
+// ----------------------------------------------------------------------------
+// collectDescendantCategoryIds
+// Собираем id категории + всех потомков.
+// Делаем BFS через один запрос всех категорий (id + parent.id),
+// чтобы избежать N запросов и рекурсии в БД.
+// ----------------------------------------------------------------------------
+function collectDescendantCategoryIds(params: {
+  rootId: number;
+  all: Array<{ id: number; parent?: { id?: number | null } | null }>;
+}): number[] {
+  const { rootId, all } = params;
+
+  // index: parentId -> childIds[]
+  const childrenByParentId = new Map<number, number[]>();
+
+  for (const row of all) {
+    const parentId = row.parent?.id ?? null;
+    if (!parentId) continue;
+
+    const list = childrenByParentId.get(parentId) ?? [];
+    list.push(row.id);
+    childrenByParentId.set(parentId, list);
+  }
+
+  const result: number[] = [];
+  const queue: number[] = [rootId];
+  const visited = new Set<number>();
+
+  while (queue.length > 0) {
+    const current = queue.shift() as number;
+
+    if (visited.has(current)) continue;
+    visited.add(current);
+    result.push(current);
+
+    const children = childrenByParentId.get(current) ?? [];
+    for (const childId of children) queue.push(childId);
+  }
+
+  return result;
 }
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
@@ -42,10 +91,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     try {
-      // ✅ ВАЖНО: используем правильный sync с фильтрацией поддерева от ROOT_NAME
       const syncService = syncServiceFactory();
       const result = await syncService.syncAll();
-
       ctx.body = result;
     } catch (err) {
       if (isSyncLockError(err)) {
@@ -62,22 +109,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/categories-flat
-   *
-   * Плоский список всех витринных категорий для построения дерева на фронте.
-   * Отдаём:
-   * - id, slug, name
-   * - productsCount (total, уже пересчитан sync/products)
-   * - parentId (для сборки дерева любой глубины)
-   *
-   * ВАЖНО:
-   * - Никаких children populate: дерево строится на фронте/в API-слое фронта.
-   * - Мы считаем, что таблица категорий уже "очищена" sync/categories (в БД только витрина).
    */
   async categoriesFlat(ctx) {
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-    // Берём все категории.
-    // parent нужен только для parent.id
     const rows = await categoryQuery.findMany({
       select: ["id", "name", "slug", "productsCount"],
       populate: {
@@ -86,8 +121,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit: 100000,
     });
 
-    // Нормализуем ответ в плоский массив.
-    // id и parentId отдаём строками, чтобы на фронте не смешивать number/string.
     ctx.body = rows.map((c: any) => ({
       id: String(c.id),
       slug: typeof c.slug === "string" ? c.slug : "",
@@ -100,29 +133,90 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
   /**
    * GET /api/catalog/products
    *
-   * Заглушка, чтобы Strapi успешно стартовал.
-   * На следующем шаге добавим реальную логику:
-   * - найти категорию по slug
-   * - собрать всех потомков (рекурсивно)
-   * - выбрать товары по category IN (...)
-   * - total + limit/offset + hasMore
+   * Контракт:
+   *   ?categorySlug=ms-xxxx&limit=50&offset=0
+   * Ответ:
+   *   { items, total, limit, offset, hasMore }
+   *
+   * ВАЖНО:
+   * - Включаем товары категории + всех её потомков (вариант B).
+   * - Фильтрация потомков делается на backend, не на frontend.
    */
   async products(ctx) {
     const categorySlug = String(ctx.query.categorySlug ?? "").trim();
     const limit = toSafeLimit(ctx.query.limit, 50);
     const offset = toSafeOffset(ctx.query.offset);
 
-    // Сейчас отдаём валидный контракт (чтобы фронт уже мог интегрироваться)
-    // и чтобы мы проверили Postman/роутинг без падения Strapi.
-    ctx.body = {
-      items: [],
-      total: 0,
+    if (!categorySlug) {
+      ctx.body = { items: [], total: 0, limit, offset, hasMore: false };
+      return;
+    }
+
+    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    // 1) Находим категорию по slug
+    const rootCategory: CategoryRow | null = await categoryQuery.findOne({
+      where: { slug: categorySlug },
+      select: ["id"],
+    });
+
+    if (!rootCategory) {
+      // slug не найден — это не 404 endpoint, это "пустая выборка"
+      ctx.body = { items: [], total: 0, limit, offset, hasMore: false };
+      return;
+    }
+
+    // 2) Берём все категории (id + parent.id) и собираем потомков в памяти
+    // Это один запрос и быстрый BFS.
+    const allCategories = await categoryQuery.findMany({
+      select: ["id"],
+      populate: { parent: { select: ["id"] } },
+      limit: 100000,
+    });
+
+    const categoryIds = collectDescendantCategoryIds({
+      rootId: rootCategory.id,
+      all: allCategories as any,
+    });
+
+    // 3) total — отдельным запросом (без limit/offset)
+    const total = await productQuery.count({
+      where: {
+        category: { id: { $in: categoryIds } },
+      },
+    });
+
+    // 4) items — порция товаров
+    // Выбираем минимум полей, нужных для карточки. Image оставляем как есть (Strapi media),
+    // фронт уже умеет маппить разные формы.
+    const rows: ProductRow[] = await productQuery.findMany({
+      where: {
+        category: { id: { $in: categoryIds } },
+      },
+      select: ["id", "name", "moyskladId", "price", "image"],
+      // Сортировка — пока стабильная и простая. Позже можно сделать "по популярности" и т.п.
+      orderBy: { id: "desc" },
       limit,
       offset,
-      hasMore: false,
+    });
 
-      // Временно: для быстрой диагностики в Postman (на следующем шаге уберём)
-      debug: { categorySlug },
+    const hasMore = offset + rows.length < total;
+
+    ctx.body = {
+      items: rows.map((p) => ({
+        id: p.id,
+        attributes: {
+          name: p.name ?? null,
+          moyskladId: p.moyskladId ?? null,
+          price: p.price ?? null,
+          image: (p as any).image ?? null,
+        },
+      })),
+      total,
+      limit,
+      offset,
+      hasMore,
     };
   },
 }));
