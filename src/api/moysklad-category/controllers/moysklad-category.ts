@@ -16,6 +16,18 @@ function toSafeCount(value: unknown): number {
   return value;
 }
 
+function toSafeLimit(value: unknown, fallback = 50): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(n, 100); // защита от случайных "limit=100000"
+}
+
+function toSafeOffset(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return n;
+}
+
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
   /**
    * POST /api/moysklad/sync/categories
@@ -83,5 +95,34 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       productsCount: toSafeCount(c.productsCount),
       parentId: c.parent?.id ? String(c.parent.id) : null,
     }));
+  },
+
+  /**
+   * GET /api/catalog/products
+   *
+   * Заглушка, чтобы Strapi успешно стартовал.
+   * На следующем шаге добавим реальную логику:
+   * - найти категорию по slug
+   * - собрать всех потомков (рекурсивно)
+   * - выбрать товары по category IN (...)
+   * - total + limit/offset + hasMore
+   */
+  async products(ctx) {
+    const categorySlug = String(ctx.query.categorySlug ?? "").trim();
+    const limit = toSafeLimit(ctx.query.limit, 50);
+    const offset = toSafeOffset(ctx.query.offset);
+
+    // Сейчас отдаём валидный контракт (чтобы фронт уже мог интегрироваться)
+    // и чтобы мы проверили Postman/роутинг без падения Strapi.
+    ctx.body = {
+      items: [],
+      total: 0,
+      limit,
+      offset,
+      hasMore: false,
+
+      // Временно: для быстрой диагностики в Postman (на следующем шаге уберём)
+      debug: { categorySlug },
+    };
   },
 }));
