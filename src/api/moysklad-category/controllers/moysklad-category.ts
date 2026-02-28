@@ -26,20 +26,10 @@ function toSafeOffset(value: unknown): number {
   return n;
 }
 
-type CategoryRow = { id: number };
-type ProductRow = {
-  id: number;
-  name?: string | null;
-  moyskladId?: string | null;
-  price?: number | null;
-  image?: unknown;
-};
-
 // ----------------------------------------------------------------------------
 // collectDescendantCategoryIds
-// Собираем id категории + всех потомков.
-// Делаем BFS через один запрос всех категорий (id + parent.id),
-// чтобы избежать N запросов и рекурсии в БД.
+// Собираем id категории + всех потомков через BFS.
+// Делается в памяти по "карте parentId -> childrenIds", чтобы избежать N+1 запросов.
 // ----------------------------------------------------------------------------
 function collectDescendantCategoryIds(params: {
   rootId: number;
@@ -47,7 +37,6 @@ function collectDescendantCategoryIds(params: {
 }): number[] {
   const { rootId, all } = params;
 
-  // index: parentId -> childIds[]
   const childrenByParentId = new Map<number, number[]>();
 
   for (const row of all) {
@@ -76,6 +65,17 @@ function collectDescendantCategoryIds(params: {
 
   return result;
 }
+
+type ProductRow = {
+  id: number;
+  name?: string | null;
+  moyskladId?: string | null;
+  price?: number | null;
+  priceOld?: number | null;
+
+  // media multiple: приходит через populate (не колонка таблицы!)
+  image?: unknown;
+};
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
   /**
@@ -133,14 +133,14 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
   /**
    * GET /api/catalog/products
    *
-   * Контракт:
+   * Query:
    *   ?categorySlug=ms-xxxx&limit=50&offset=0
+   *
    * Ответ:
    *   { items, total, limit, offset, hasMore }
    *
-   * ВАЖНО:
-   * - Включаем товары категории + всех её потомков (вариант B).
-   * - Фильтрация потомков делается на backend, не на frontend.
+   * items — массив Strapi-like объектов: { id, attributes: {...} }
+   * Это сделано специально, чтобы фронтовый mapProductPreview мог работать без переделок.
    */
   async products(ctx) {
     const categorySlug = String(ctx.query.categorySlug ?? "").trim();
@@ -156,19 +156,17 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
     // 1) Находим категорию по slug
-    const rootCategory: CategoryRow | null = await categoryQuery.findOne({
+    const rootCategory: { id: number } | null = await categoryQuery.findOne({
       where: { slug: categorySlug },
       select: ["id"],
     });
 
     if (!rootCategory) {
-      // slug не найден — это не 404 endpoint, это "пустая выборка"
       ctx.body = { items: [], total: 0, limit, offset, hasMore: false };
       return;
     }
 
-    // 2) Берём все категории (id + parent.id) и собираем потомков в памяти
-    // Это один запрос и быстрый BFS.
+    // 2) Берём все категории (id + parent.id), строим список потомков (вариант B)
     const allCategories = await categoryQuery.findMany({
       select: ["id"],
       populate: { parent: { select: ["id"] } },
@@ -180,7 +178,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       all: allCategories as any,
     });
 
-    // 3) total — отдельным запросом (без limit/offset)
+    // 3) total — отдельным запросом
     const total = await productQuery.count({
       where: {
         category: { id: { $in: categoryIds } },
@@ -188,14 +186,23 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     });
 
     // 4) items — порция товаров
-    // Выбираем минимум полей, нужных для карточки. Image оставляем как есть (Strapi media),
-    // фронт уже умеет маппить разные формы.
+    // ВАЖНО: image — это media relation. Её нельзя включать в select.
+    // Нужен populate.
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         category: { id: { $in: categoryIds } },
       },
-      select: ["id", "name", "moyskladId", "price", "image"],
-      // Сортировка — пока стабильная и простая. Позже можно сделать "по популярности" и т.п.
+
+      // только реальные колонки таблицы
+      select: ["id", "name", "moyskladId", "price", "priceOld"],
+
+      // медиа тянем через populate
+      populate: {
+        image: {
+          select: ["url", "alternativeText", "formats"],
+        },
+      },
+
       orderBy: { id: "desc" },
       limit,
       offset,
@@ -210,6 +217,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           name: p.name ?? null,
           moyskladId: p.moyskladId ?? null,
           price: p.price ?? null,
+          priceOld: p.priceOld ?? null,
           image: (p as any).image ?? null,
         },
       })),
