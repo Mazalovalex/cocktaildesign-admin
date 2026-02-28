@@ -71,7 +71,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       populate: {
         parent: { select: ["id"] },
       },
-      orderBy: { name: "asc" },
       limit: 100000,
     });
 
