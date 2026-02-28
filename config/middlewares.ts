@@ -9,10 +9,15 @@ const config: Core.Config.Middlewares = [
     name: "strapi::cors",
     config: {
       origin: [
-        "https://cocktaildesign.vercel.app",
+        // production
         "https://new.cocktaildesign.ru",
         "https://cocktaildesign.ru",
         "https://www.cocktaildesign.ru",
+
+        // development
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://192.168.1.126:3000",
       ],
       credentials: true,
       headers: "*",
