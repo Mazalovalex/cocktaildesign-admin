@@ -23,5 +23,13 @@ export default {
         auth: false,
       },
     },
+		
+    // получить товар по ID
+    {
+      method: "GET",
+      path: "/catalog/products-by-ids",
+      handler: "moysklad-category.productsByIds",
+      config: { auth: false },
+    },
   ],
 };

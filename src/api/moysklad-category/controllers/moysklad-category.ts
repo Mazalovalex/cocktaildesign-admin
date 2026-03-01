@@ -27,6 +27,46 @@ function toSafeOffset(value: unknown): number {
 }
 
 // ----------------------------------------------------------------------------
+// parseIdsQuery
+// Читаем query `ids=1,2,3` и превращаем в массив number[].
+//
+// Почему number:
+// - id в Strapi в БД числовой
+// - $in ожидает числа (так стабильнее и безопаснее)
+//
+// Защиты:
+// - убираем пустые значения
+// - игнорируем NaN
+// - убираем дубликаты, сохраняя порядок
+// - ограничиваем максимум (чтобы не убить БД)
+// ----------------------------------------------------------------------------
+function parseIdsQuery(value: unknown, max = 100): number[] {
+  if (typeof value !== "string") return [];
+
+  const parts = value
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+
+  const result: number[] = [];
+  const seen = new Set<number>();
+
+  for (const part of parts) {
+    const n = Number(part);
+
+    if (!Number.isFinite(n)) continue;
+    if (seen.has(n)) continue;
+
+    seen.add(n);
+    result.push(n);
+
+    if (result.length >= max) break;
+  }
+
+  return result;
+}
+
+// ----------------------------------------------------------------------------
 // collectDescendantCategoryIds
 // Собираем id категории + всех потомков через BFS.
 // Делается в памяти по "карте parentId -> childrenIds", чтобы избежать N+1 запросов.
@@ -225,6 +265,69 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit,
       offset,
       hasMore,
+    };
+  },
+
+  /**
+   * GET /api/catalog/products-by-ids
+   *
+   * Query:
+   *   ?ids=1,2,3
+   *
+   * Ответ:
+   *   { items }
+   *
+   * items — массив Strapi-like объектов: { id, attributes: {...} }
+   * Формат такой же, как в products(), чтобы фронт мог использовать те же мапперы.
+   */
+  async productsByIds(ctx) {
+    const ids = parseIdsQuery(ctx.query.ids);
+
+    if (ids.length === 0) {
+      ctx.body = { items: [] };
+      return;
+    }
+
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    const rows: ProductRow[] = await productQuery.findMany({
+      where: {
+        id: { $in: ids },
+      },
+
+      // только реальные колонки таблицы
+      select: ["id", "name", "moyskladId", "price", "priceOld"],
+
+      // медиа тянем через populate
+      populate: {
+        image: {
+          select: ["url", "alternativeText", "formats"],
+        },
+      },
+
+      // защита от больших запросов
+      limit: 100,
+    });
+
+    // $in не гарантирует порядок — приводим к порядку ids
+    const order = new Map<number, number>();
+    ids.forEach((id, index) => order.set(id, index));
+
+    rows.sort((a, b) => {
+      return (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
+    });
+
+    ctx.body = {
+      items: rows.map((p) => ({
+        id: p.id,
+        attributes: {
+          name: p.name ?? null,
+          moyskladId: p.moyskladId ?? null,
+          price: p.price ?? null,
+          priceOld: p.priceOld ?? null,
+          image: (p as any).image ?? null,
+        },
+      })),
     };
   },
 }));
