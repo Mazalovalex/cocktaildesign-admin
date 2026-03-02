@@ -28,17 +28,6 @@ function toSafeOffset(value: unknown): number {
 
 // ----------------------------------------------------------------------------
 // parseIdsQuery
-// Читаем query `ids=1,2,3` и превращаем в массив number[].
-//
-// Почему number:
-// - id в Strapi в БД числовой
-// - $in ожидает числа (так стабильнее и безопаснее)
-//
-// Защиты:
-// - убираем пустые значения
-// - игнорируем NaN
-// - убираем дубликаты, сохраняя порядок
-// - ограничиваем максимум (чтобы не убить БД)
 // ----------------------------------------------------------------------------
 function parseIdsQuery(value: unknown, max = 100): number[] {
   if (typeof value !== "string") return [];
@@ -68,8 +57,6 @@ function parseIdsQuery(value: unknown, max = 100): number[] {
 
 // ----------------------------------------------------------------------------
 // collectDescendantCategoryIds
-// Собираем id категории + всех потомков через BFS.
-// Делается в памяти по "карте parentId -> childrenIds", чтобы избежать N+1 запросов.
 // ----------------------------------------------------------------------------
 function collectDescendantCategoryIds(params: {
   rootId: number;
@@ -106,15 +93,80 @@ function collectDescendantCategoryIds(params: {
   return result;
 }
 
+// ----------------------------------------------------------------------------
+// Breadcrumbs: собрать цепочку категорий от листа к корню (по parent)
+// ----------------------------------------------------------------------------
+type CategoryRowLite = {
+  id: number;
+  name?: string | null;
+  slug?: string | null;
+  parent?: { id?: number | null } | null;
+};
+
+type BreadcrumbCategory = {
+  id: string;
+  slug: string;
+  name: string;
+};
+
+// Технический корень витрины (у тебя на фронте такой же id).
+// Нужен только чтобы НЕ показывать его в хлебных крошках.
+const CATALOG_ROOT_PARENT_ID = 14;
+
+function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] }): BreadcrumbCategory[] {
+  const { startId, all } = params;
+
+  const byId = new Map<number, CategoryRowLite>();
+  for (const row of all) byId.set(row.id, row);
+
+  const chain: BreadcrumbCategory[] = [];
+  const visited = new Set<number>();
+
+  let currentId: number | null = startId;
+
+  while (currentId) {
+    if (visited.has(currentId)) break; // защита от циклов
+    visited.add(currentId);
+
+    const node = byId.get(currentId);
+    if (!node) break;
+
+    // скрываем технический root витрины
+    if (node.id !== CATALOG_ROOT_PARENT_ID) {
+      const slug = typeof node.slug === "string" ? node.slug.trim() : "";
+      const name = typeof node.name === "string" ? node.name.trim() : "";
+
+      // slug/name обязательны для UI-крошек
+      if (slug && name) {
+        chain.push({
+          id: String(node.id),
+          slug,
+          name,
+        });
+      }
+    }
+
+    const parentId = node.parent?.id ?? null;
+    currentId = parentId ? parentId : null;
+  }
+
+  // сейчас chain: [лист, ..., корень] → разворачиваем
+  chain.reverse();
+  return chain;
+}
+
 type ProductRow = {
   id: number;
   name?: string | null;
   moyskladId?: string | null;
+  slug?: string | null;
+
   price?: number | null;
   priceOld?: number | null;
+  description?: string | null;
 
-  // media multiple: приходит через populate (не колонка таблицы!)
   image?: unknown;
+  category?: { id?: number | null } | null;
 };
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
@@ -172,15 +224,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/products
-   *
-   * Query:
-   *   ?categorySlug=ms-xxxx&limit=50&offset=0
-   *
-   * Ответ:
-   *   { items, total, limit, offset, hasMore }
-   *
-   * items — массив Strapi-like объектов: { id, attributes: {...} }
-   * Это сделано специально, чтобы фронтовый mapProductPreview мог работать без переделок.
    */
   async products(ctx) {
     const categorySlug = String(ctx.query.categorySlug ?? "").trim();
@@ -206,7 +249,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    // 2) Берём все категории (id + parent.id), строим список потомков (вариант B)
+    // 2) Берём все категории (id + parent.id), строим список потомков
     const allCategories = await categoryQuery.findMany({
       select: ["id"],
       populate: { parent: { select: ["id"] } },
@@ -226,17 +269,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     });
 
     // 4) items — порция товаров
-    // ВАЖНО: image — это media relation. Её нельзя включать в select.
-    // Нужен populate.
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         category: { id: { $in: categoryIds } },
       },
 
-      // только реальные колонки таблицы
       select: ["id", "name", "moyskladId", "price", "priceOld"],
 
-      // медиа тянем через populate
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
@@ -270,15 +309,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/products-by-ids
-   *
-   * Query:
-   *   ?ids=1,2,3
-   *
-   * Ответ:
-   *   { items }
-   *
-   * items — массив Strapi-like объектов: { id, attributes: {...} }
-   * Формат такой же, как в products(), чтобы фронт мог использовать те же мапперы.
    */
   async productsByIds(ctx) {
     const ids = parseIdsQuery(ctx.query.ids);
@@ -295,21 +325,17 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         id: { $in: ids },
       },
 
-      // только реальные колонки таблицы
       select: ["id", "name", "moyskladId", "price", "priceOld"],
 
-      // медиа тянем через populate
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
         },
       },
 
-      // защита от больших запросов
       limit: 100,
     });
 
-    // $in не гарантирует порядок — приводим к порядку ids
     const order = new Map<number, number>();
     ids.forEach((id, index) => order.set(id, index));
 
@@ -328,6 +354,85 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           image: (p as any).image ?? null,
         },
       })),
+    };
+  },
+
+  /**
+   * GET /api/catalog/product?slug=ms-xxxxxxx
+   *
+   * Возвращает:
+   *  - item: Strapi-like объект { id, attributes }
+   *  - breadcrumbsCategories: цепочка категорий (без "технического корня")
+   *
+   * Почему так:
+   *  - item совместим с вашим подходом "mapProductPreview" (strapi-like)
+   *  - breadcrumbsCategories позволяет фронту собрать:
+   *    Главная / Каталог / ...категории... / Товар
+   */
+  async productBySlug(ctx) {
+    const slug = String(ctx.query.slug ?? "").trim();
+
+    if (!slug) {
+      ctx.status = 400;
+      ctx.body = { error: "slug_required" };
+      return;
+    }
+
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+    // 1) Находим товар по slug
+    // ВАЖНО:
+    //  - category нужна для крошек (id)
+    //  - image нужна для карточки
+    const product: ProductRow | null = await productQuery.findOne({
+      where: { slug },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["id"] },
+      },
+    });
+
+    if (!product) {
+      ctx.status = 404;
+      ctx.body = { error: "not_found" };
+      return;
+    }
+
+    const categoryId = product.category?.id ?? null;
+
+    // 2) Крошки категорий: собираем chain через "все категории" (без N+1)
+    let breadcrumbsCategories: BreadcrumbCategory[] = [];
+
+    if (categoryId) {
+      const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
+        select: ["id", "name", "slug"],
+        populate: { parent: { select: ["id"] } },
+        limit: 100000,
+      });
+
+      breadcrumbsCategories = buildCategoryChain({
+        startId: categoryId,
+        all: allCategories,
+      });
+    }
+
+    // 3) Отдаём "Strapi-like" item + отдельно breadcrumbsCategories
+    ctx.body = {
+      item: {
+        id: product.id,
+        attributes: {
+          name: product.name ?? null,
+          moyskladId: product.moyskladId ?? null,
+          slug: product.slug ?? null,
+          price: product.price ?? null,
+          priceOld: product.priceOld ?? null,
+          description: product.description ?? null,
+          image: (product as any).image ?? null,
+        },
+      },
+      breadcrumbsCategories,
     };
   },
 }));

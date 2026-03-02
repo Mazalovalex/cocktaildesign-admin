@@ -20,6 +20,11 @@
       "required": true,
       "unique": true
     },
+    "slug": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
     "code": {
       "type": "string"
     },
