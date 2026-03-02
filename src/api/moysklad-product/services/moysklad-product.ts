@@ -23,6 +23,10 @@
 // ДОБАВЛЕНО (counts after webhook):
 // - После webhook-upsert/delete пересчитываем productsCount локально (ТОЛЬКО по БД Strapi)
 // - Никаких запросов в MoySklad для этого не делаем
+//
+// ДОБАВЛЕНО (slug):
+// - Стабильный slug вида "ms-xxxxxxxx" из moyskladId
+// - Заполняем при syncAll и при webhook upsert (product + bundle)
 
 import { factories } from "@strapi/strapi";
 import {
@@ -152,6 +156,14 @@ function pickIdFromHref(href?: string): string | null {
 }
 
 /**
+ * Стабильный slug из MoySklad ID.
+ * НЕ используем name → URL не ломается при переименовании.
+ */
+function makeStableSlug(moyskladId: string): string {
+  return `ms-${moyskladId.slice(0, 8)}`;
+}
+
+/**
  * Цена из salePrices по точному имени типа цены.
  * MoySklad хранит value в копейках.
  */
@@ -231,6 +243,11 @@ async function fetchBundleJson(url: string, token: string): Promise<MoySkladBund
  */
 function hasCategoryAttribute(attrName: string): boolean {
   const ct = strapi.contentTypes["api::moysklad-category.moysklad-category"];
+  return Boolean(ct?.attributes && Object.prototype.hasOwnProperty.call(ct.attributes, attrName));
+}
+
+function hasProductAttribute(attrName: string): boolean {
+  const ct = strapi.contentTypes["api::moysklad-product.moysklad-product"];
   return Boolean(ct?.attributes && Object.prototype.hasOwnProperty.call(ct.attributes, attrName));
 }
 
@@ -422,8 +439,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     });
 
     const nowIso = new Date().toISOString();
+    const canWriteSlug = hasProductAttribute("slug");
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       type: "product",
 
       name: entity.name ?? "",
@@ -446,6 +464,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       publishedAt: nowIso,
     };
+
+    if (canWriteSlug) {
+      payload.slug = makeStableSlug(moyskladId);
+    }
 
     if (existing) {
       await productQuery.update({ where: { id: existing.id }, data: payload });
@@ -505,8 +527,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     });
 
     const nowIso = new Date().toISOString();
+    const canWriteSlug = hasProductAttribute("slug");
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       type: "bundle",
 
       name: entity.name ?? "",
@@ -529,6 +552,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       publishedAt: nowIso,
     };
+
+    if (canWriteSlug) {
+      payload.slug = makeStableSlug(moyskladId);
+    }
 
     // 1) upsert bundle
     if (existing) {
@@ -581,6 +608,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
       const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+      const canWriteSlug = hasProductAttribute("slug");
 
       // 1) Разрешённые категории (уже синкнутые витринные)
       const categories = await categoryQuery.findMany({
@@ -649,7 +678,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           select: ["id"],
         });
 
-        const payload = {
+        const payload: Record<string, unknown> = {
           type: "product",
 
           name: p.name,
@@ -672,6 +701,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
           publishedAt: nowIso,
         };
+
+        if (canWriteSlug) {
+          payload.slug = makeStableSlug(p.id);
+        }
 
         if (existing) {
           await productQuery.update({ where: { id: existing.id }, data: payload });
@@ -703,7 +736,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           select: ["id"],
         });
 
-        const payload = {
+        const payload: Record<string, unknown> = {
           type: "bundle",
 
           name: b.name,
@@ -725,6 +758,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
           publishedAt: nowIso,
         };
+
+        if (canWriteSlug) {
+          payload.slug = makeStableSlug(b.id);
+        }
 
         if (existing) {
           await productQuery.update({ where: { id: existing.id }, data: payload });
