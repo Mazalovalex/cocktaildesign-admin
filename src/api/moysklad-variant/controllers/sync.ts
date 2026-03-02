@@ -27,6 +27,14 @@ export default {
    * }
    */
   async syncVariants(ctx) {
+    // ✅ Проверяем секрет — как и в остальных sync endpoints
+    const secret = ctx.request.headers["x-webhook-secret"];
+    if (secret !== process.env.MOYSKLAD_WEBHOOK_SECRET) {
+      ctx.status = 401;
+      ctx.body = { ok: false };
+      return;
+    }
+
     try {
       const result = await syncAllVariants();
 
@@ -35,14 +43,12 @@ export default {
         ...result,
       };
     } catch (err) {
-      // Приводим к удобному типу для логирования
       const e = err as {
         message?: string;
         stack?: string;
         cause?: unknown;
       };
 
-      // === ВАЖНО: подробные логи ===
       strapi.log.error("[moysklad] variants sync failed");
 
       if (e?.message) {
@@ -51,8 +57,6 @@ export default {
         strapi.log.error(`[moysklad] message: ${String(err)}`);
       }
 
-      // cause часто содержит реальную причину fetch failed:
-      // ENOTFOUND, ECONNREFUSED, CERT_*, UND_ERR_CONNECT_TIMEOUT и т.д.
       if (e?.cause) {
         strapi.log.error(`[moysklad] cause: ${String(e.cause)}`);
 
@@ -67,7 +71,6 @@ export default {
         strapi.log.error(`[moysklad] stack:\n${e.stack}`);
       }
 
-      // Ответ клиенту
       ctx.status = 500;
       ctx.body = {
         ok: false,

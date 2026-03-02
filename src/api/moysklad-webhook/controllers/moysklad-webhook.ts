@@ -6,6 +6,13 @@ type WebhookEvent = {
   meta?: { href?: string; type?: string };
 };
 
+// ✅ Только официальный домен МойСклад — защита от SSRF
+const MOYSKLAD_API_HOST = "https://api.moysklad.ru/";
+
+function isSafeHref(href: string): boolean {
+  return href.startsWith(MOYSKLAD_API_HOST);
+}
+
 function getStringQuery(ctx: Context, key: string): string | null {
   const v = (ctx.query as Record<string, unknown>)[key];
   return typeof v === "string" ? v : null;
@@ -34,6 +41,12 @@ async function processEvent(event: WebhookEvent) {
 
   if (!href || !type) {
     strapi.log.warn("[moysklad-webhook] skipped: missing href/type");
+    return;
+  }
+
+  // ✅ Проверяем href перед любым fetch — защита от SSRF
+  if (!isSafeHref(href)) {
+    strapi.log.warn(`[moysklad-webhook] blocked unsafe href: ${href}`);
     return;
   }
 
