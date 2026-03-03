@@ -166,7 +166,7 @@ type ProductRow = {
   description?: string | null;
 
   image?: unknown;
-  category?: { id?: number | null } | null;
+  category?: { id?: number | null; name?: string | null } | null;
 };
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
@@ -359,15 +359,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/product?slug=ms-xxxxxxx
-   *
-   * Возвращает:
-   *  - item: Strapi-like объект { id, attributes }
-   *  - breadcrumbsCategories: цепочка категорий (без "технического корня")
-   *
-   * Почему так:
-   *  - item совместим с вашим подходом "mapProductPreview" (strapi-like)
-   *  - breadcrumbsCategories позволяет фронту собрать:
-   *    Главная / Каталог / ...категории... / Товар
    */
   async productBySlug(ctx) {
     const slug = String(ctx.query.slug ?? "").trim();
@@ -381,10 +372,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-    // 1) Находим товар по slug
-    // ВАЖНО:
-    //  - category нужна для крошек (id)
-    //  - image нужна для карточки
     const product: ProductRow | null = await productQuery.findOne({
       where: { slug },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description"],
@@ -402,7 +389,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const categoryId = product.category?.id ?? null;
 
-    // 2) Крошки категорий: собираем chain через "все категории" (без N+1)
     let breadcrumbsCategories: BreadcrumbCategory[] = [];
 
     if (categoryId) {
@@ -418,7 +404,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       });
     }
 
-    // 3) Отдаём "Strapi-like" item + отдельно breadcrumbsCategories
     ctx.body = {
       item: {
         id: product.id,
@@ -433,6 +418,68 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         },
       },
       breadcrumbsCategories,
+    };
+  },
+
+  /**
+   * GET /api/catalog/search?q=шейкер
+   *
+   * Поиск товаров по названию (частичное совпадение, без учёта регистра).
+   *
+   * Параметры:
+   *  - q: строка поиска (обязательный, минимум 2 символа)
+   *
+   * Ответ:
+   *  { items: [ { id, attributes: { name, slug, price, priceOld, image, categoryName } } ] }
+   *
+   * Важно:
+   *  - максимум 10 результатов (для поисковой панели этого достаточно)
+   *  - возвращаем categoryName чтобы фронт мог показать подкатегорию под названием товара
+   */
+  async search(ctx) {
+    const q = String(ctx.query.q ?? "").trim();
+
+    // Минимум 2 символа — защита от запросов типа "а" которые вернут всё
+    if (q.length < 2) {
+      ctx.body = { items: [] };
+      return;
+    }
+
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    const rows: ProductRow[] = await productQuery.findMany({
+      where: {
+        name: { $containsi: q }, // $containsi = contains case-insensitive
+      },
+
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
+
+      populate: {
+        image: {
+          select: ["url", "alternativeText", "formats"],
+        },
+        category: {
+          select: ["name"],
+        },
+      },
+
+      orderBy: { id: "desc" },
+      limit: 10,
+    });
+
+    ctx.body = {
+      items: rows.map((p) => ({
+        id: p.id,
+        attributes: {
+          name: p.name ?? null,
+          moyskladId: p.moyskladId ?? null,
+          slug: p.slug ?? null,
+          price: p.price ?? null,
+          priceOld: p.priceOld ?? null,
+          image: (p as any).image ?? null,
+          categoryName: (p as any).category?.name ?? null,
+        },
+      })),
     };
   },
 }));

@@ -33,16 +33,25 @@ export default {
       handler: "moysklad-category.productsByIds",
       config: { auth: false },
     },
+
     // ----------------------------------------------------------------------------
     // Детальная карточка товара по slug (ms-xxxxxxx)
-    // Возвращает:
-    //  - item (Strapi-like: { id, attributes })
-    //  - breadcrumbsCategories: цепочка категорий (для хлебных крошек)
     // ----------------------------------------------------------------------------
     {
       method: "GET",
       path: "/catalog/product",
       handler: "moysklad-category.productBySlug",
+      config: { auth: false },
+    },
+
+    // ----------------------------------------------------------------------------
+    // Поиск товаров по названию
+    // GET /api/catalog/search?q=шейкер
+    // ----------------------------------------------------------------------------
+    {
+      method: "GET",
+      path: "/catalog/search",
+      handler: "moysklad-category.search",
       config: { auth: false },
     },
   ],
