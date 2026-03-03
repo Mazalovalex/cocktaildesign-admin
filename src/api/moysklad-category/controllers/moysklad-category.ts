@@ -482,4 +482,57 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       })),
     };
   },
+
+  /**
+   * GET /api/catalog/random-products?count=2
+   *
+   * Возвращает N случайных товаров из всей базы.
+   * Используется в виджете поиска (idle состояние).
+   *
+   * Параметры:
+   *  - count: количество товаров (по умолчанию 2, максимум 6)
+   */
+  async randomProducts(ctx) {
+    const count = Math.min(Math.max(Number(ctx.query.count ?? 2), 1), 6);
+
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    // Узнаём общее количество товаров в базе
+    const total = await productQuery.count({});
+
+    if (total === 0) {
+      ctx.body = { items: [] };
+      return;
+    }
+
+    // Генерируем случайный offset и берём count товаров с этой позиции.
+    // Если offset + count выходит за пределы — берём с конца.
+    const maxOffset = Math.max(0, total - count);
+    const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
+
+    const rows: ProductRow[] = await productQuery.findMany({
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["name"] },
+      },
+      orderBy: { id: "asc" },
+      limit: count,
+      offset: randomOffset,
+    });
+
+    ctx.body = {
+      items: rows.map((p) => ({
+        id: p.id,
+        attributes: {
+          name: p.name ?? null,
+          slug: p.slug ?? null,
+          price: p.price ?? null,
+          priceOld: p.priceOld ?? null,
+          image: (p as any).image ?? null,
+          categoryName: (p as any).category?.name ?? null,
+        },
+      })),
+    };
+  },
 }));

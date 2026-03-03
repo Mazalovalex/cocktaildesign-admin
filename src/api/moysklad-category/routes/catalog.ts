@@ -54,5 +54,16 @@ export default {
       handler: "moysklad-category.search",
       config: { auth: false },
     },
+
+    // ----------------------------------------------------------------------------
+    // Случайные товары для виджета в поиске
+    // GET /api/catalog/random-products?count=2
+    // ----------------------------------------------------------------------------
+    {
+      method: "GET",
+      path: "/catalog/random-products",
+      handler: "moysklad-category.randomProducts",
+      config: { auth: false },
+    },
   ],
 };
