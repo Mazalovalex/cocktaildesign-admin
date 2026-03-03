@@ -447,23 +447,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
-    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
-
-    const allCategories = await categoryQuery.findMany({
-      select: ["id"],
-      populate: { parent: { select: ["id"] } },
-      limit: 100000,
-    });
-
-    const catalogCategoryIds = collectDescendantCategoryIds({
-      rootId: 14,
-      all: allCategories as any,
-    });
-
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         name: { $containsi: q }, // $containsi = contains case-insensitive
-        category: { id: { $in: catalogCategoryIds } }, // ← добавь
+        category: { id: { $ne: 14 } }, // исключаем корневую категорию — там висят уцененные без цены
       },
 
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
@@ -511,22 +498,11 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
-    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
-
-    const allCategories = await categoryQuery.findMany({
-      select: ["id"],
-      populate: { parent: { select: ["id"] } },
-      limit: 100000,
-    });
-
-    const catalogCategoryIds = collectDescendantCategoryIds({
-      rootId: 14,
-      all: allCategories as any,
-    });
-
-    // Узнаём общее количество товаров в базе
+    // Узнаём количество товаров исключая корневую категорию
     const total = await productQuery.count({
-      where: { category: { id: { $in: catalogCategoryIds } } }, // ← добавь
+      where: {
+        category: { id: { $ne: 14 } }, // исключаем корневую категорию — там висят уцененные без цены
+      },
     });
 
     if (total === 0) {
@@ -541,7 +517,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        category: { id: { $in: catalogCategoryIds } },
+        category: { id: { $ne: 14 } }, // исключаем корневую категорию
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
       populate: {
