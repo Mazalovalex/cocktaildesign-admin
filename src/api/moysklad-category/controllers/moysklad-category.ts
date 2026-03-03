@@ -450,7 +450,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         name: { $containsi: q }, // $containsi = contains case-insensitive
-        category: { id: { $ne: 14 } }, // исключаем корневую категорию — там висят уцененные без цены
+        category: { id: { $notIn: [14] } }, // исключаем корневую категорию — там висят уцененные без цены
       },
 
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
@@ -501,7 +501,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     // Узнаём количество товаров исключая корневую категорию
     const total = await productQuery.count({
       where: {
-        category: { id: { $ne: 14 } }, // исключаем корневую категорию — там висят уцененные без цены
+        category: { id: { $notIn: [14] } }, // исключаем корневую категорию — там висят уцененные без цены
       },
     });
 
@@ -517,7 +517,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        category: { id: { $ne: 14 } }, // исключаем корневую категорию
+        category: { id: { $notIn: [14] } }, // исключаем корневую категорию
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
       populate: {
