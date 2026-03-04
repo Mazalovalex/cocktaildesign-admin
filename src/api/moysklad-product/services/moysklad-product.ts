@@ -56,7 +56,7 @@ type MoySkladProduct = {
   name: string;
   code?: string;
   updated?: string;
-
+  description?: string;
   meta: MoySkladMeta;
 
   productFolder?: {
@@ -78,7 +78,7 @@ type MoySkladBundle = {
   name: string;
   code?: string;
   updated?: string;
-
+  description?: string;
   meta: MoySkladMeta;
 
   productFolder?: {
@@ -119,7 +119,7 @@ type MoySkladWebhookProduct = {
   name?: string;
   code?: string;
   updated?: string;
-
+  description?: string;
   meta?: { href?: string };
 
   productFolder?: { meta?: { href?: string } };
@@ -446,7 +446,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       name: entity.name ?? "",
       displayTitle: entity.name ?? "",
-
+      description: typeof entity.description === "string" ? entity.description : null,
       moyskladId,
       href,
 
@@ -534,6 +534,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       name: entity.name ?? "",
       displayTitle: entity.name ?? "",
+      description: typeof entity.description === "string" ? entity.description : null,
 
       moyskladId,
       href,
@@ -683,7 +684,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
           name: p.name,
           displayTitle: p.name,
-
+          description: typeof p.description === "string" ? p.description : null,
           moyskladId: p.id,
           href: p.meta.href,
           code: p.code ?? null,
@@ -741,7 +742,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
           name: b.name,
           displayTitle: b.name,
-
+          description: typeof b.description === "string" ? b.description : null,
           moyskladId: b.id,
           href: b.meta.href,
           code: b.code ?? null,
