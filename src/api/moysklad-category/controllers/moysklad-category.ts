@@ -443,7 +443,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: product.price ?? null,
           priceOld: product.priceOld ?? null,
           description: product.description ?? null,
-          image: (product as any).image ?? null,
+          image: Array.isArray((product as any).image) ? (product as any).image : [],
         },
       },
 
