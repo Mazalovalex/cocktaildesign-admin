@@ -167,6 +167,18 @@ type ProductRow = {
 
   image?: unknown;
   category?: { id?: number | null; name?: string | null } | null;
+
+  // ✅ variants (populate)
+  variants?: VariantRow[] | null;
+};
+
+type VariantRow = {
+  id: number;
+  name?: string | null;
+  moyskladId?: string | null;
+  price?: number | null;
+  priceOld?: number | null;
+  characteristics?: unknown;
 };
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
@@ -378,6 +390,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id"] },
+
+        // ✅ Варианты товара (цвет/объём/и т.д.)
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
+          orderBy: { id: "asc" },
+        },
       },
     });
 
@@ -404,6 +422,17 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       });
     }
 
+    const variants = (product.variants ?? []).map((v) => ({
+      id: v.id,
+      attributes: {
+        name: v.name ?? null,
+        moyskladId: v.moyskladId ?? null,
+        price: v.price ?? null,
+        priceOld: v.priceOld ?? null,
+        characteristics: (v as any).characteristics ?? null,
+      },
+    }));
+
     ctx.body = {
       item: {
         id: product.id,
@@ -417,6 +446,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           image: (product as any).image ?? null,
         },
       },
+
+      // ✅ добавили variants отдельным полем ответа
+      variants,
+
       breadcrumbsCategories,
     };
   },
