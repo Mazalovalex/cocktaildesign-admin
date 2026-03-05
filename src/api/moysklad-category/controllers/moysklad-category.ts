@@ -155,6 +155,15 @@ function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] })
   return chain;
 }
 
+type VariantRow = {
+  id: number;
+  name?: string | null;
+  moyskladId?: string | null;
+  price?: number | null;
+  priceOld?: number | null;
+  characteristics?: unknown;
+};
+
 type ProductRow = {
   id: number;
   name?: string | null;
@@ -170,15 +179,6 @@ type ProductRow = {
 
   // ✅ variants (populate)
   variants?: VariantRow[] | null;
-};
-
-type VariantRow = {
-  id: number;
-  name?: string | null;
-  moyskladId?: string | null;
-  price?: number | null;
-  priceOld?: number | null;
-  characteristics?: unknown;
 };
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
@@ -286,7 +286,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         category: { id: { $in: categoryIds } },
       },
 
-      select: ["id", "name", "moyskladId", "price", "priceOld"],
+      // ✅ ДОБАВИЛИ slug, чтобы фронт мог строить ссылку /catalog/product/[slug]
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
 
       populate: {
         image: {
@@ -307,6 +308,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         attributes: {
           name: p.name ?? null,
           moyskladId: p.moyskladId ?? null,
+
+          // ✅ ВАЖНО: slug теперь возвращается в списке
+          slug: p.slug ?? null,
+
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           image: (p as any).image ?? null,
@@ -337,7 +342,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         id: { $in: ids },
       },
 
-      select: ["id", "name", "moyskladId", "price", "priceOld"],
+      // ✅ ДОБАВИЛИ slug, чтобы items были самодостаточными для карточек
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
 
       populate: {
         image: {
@@ -361,6 +367,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         attributes: {
           name: p.name ?? null,
           moyskladId: p.moyskladId ?? null,
+
+          // ✅ ВАЖНО: slug теперь возвращается и тут
+          slug: p.slug ?? null,
+
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           image: (p as any).image ?? null,
