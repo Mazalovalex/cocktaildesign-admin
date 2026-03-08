@@ -1,4 +1,3 @@
-// backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
 import syncServiceFactory from "../services/sync";
 
@@ -164,6 +163,13 @@ type VariantRow = {
   characteristics?: unknown;
 };
 
+type ProductSpecificationRow = {
+  id?: number;
+  label?: string | null;
+  value?: string | null;
+  href?: string | null;
+};
+
 type ProductRow = {
   id: number;
   name?: string | null;
@@ -176,6 +182,8 @@ type ProductRow = {
 
   image?: unknown;
   category?: { id?: number | null; name?: string | null } | null;
+
+  specifications?: ProductSpecificationRow[] | null;
 
   // ✅ variants (populate)
   variants?: VariantRow[] | null;
@@ -286,7 +294,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         category: { id: { $in: categoryIds } },
       },
 
-      // ✅ ДОБАВИЛИ slug, чтобы фронт мог строить ссылку /catalog/product/[slug]
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
 
       populate: {
@@ -308,10 +315,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         attributes: {
           name: p.name ?? null,
           moyskladId: p.moyskladId ?? null,
-
-          // ✅ ВАЖНО: slug теперь возвращается в списке
           slug: p.slug ?? null,
-
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           image: (p as any).image ?? null,
@@ -342,7 +346,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         id: { $in: ids },
       },
 
-      // ✅ ДОБАВИЛИ slug, чтобы items были самодостаточными для карточек
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
 
       populate: {
@@ -367,10 +370,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         attributes: {
           name: p.name ?? null,
           moyskladId: p.moyskladId ?? null,
-
-          // ✅ ВАЖНО: slug теперь возвращается и тут
           slug: p.slug ?? null,
-
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           image: (p as any).image ?? null,
@@ -401,7 +401,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id"] },
 
-        // ✅ Варианты товара (цвет/объём/и т.д.)
+        specifications: {
+          select: ["id", "label", "value", "href"],
+        },
+
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
           orderBy: { id: "asc" },
@@ -443,6 +446,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       },
     }));
 
+    const specifications = (product.specifications ?? []).map((spec) => ({
+      id: spec.id ?? null,
+      label: spec.label ?? null,
+      value: spec.value ?? null,
+      href: spec.href ?? null,
+    }));
+
     ctx.body = {
       item: {
         id: product.id,
@@ -454,12 +464,11 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           priceOld: product.priceOld ?? null,
           description: product.description ?? null,
           image: Array.isArray((product as any).image) ? (product as any).image : [],
+          specifications,
         },
       },
 
-      // ✅ добавили variants отдельным полем ответа
       variants,
-
       breadcrumbsCategories,
     };
   },
@@ -482,7 +491,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
   async search(ctx) {
     const q = String(ctx.query.q ?? "").trim();
 
-    // Минимум 2 символа — защита от запросов типа "а" которые вернут всё
     if (q.length < 2) {
       ctx.body = { items: [] };
       return;
@@ -492,8 +500,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        name: { $containsi: q }, // $containsi = contains case-insensitive
-        category: { id: { $notIn: [14] } }, // исключаем корневую категорию — там висят уцененные без цены
+        name: { $containsi: q },
+        category: { id: { $notIn: [14] } },
       },
 
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
@@ -541,10 +549,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
-    // Узнаём количество товаров исключая корневую категорию
     const total = await productQuery.count({
       where: {
-        category: { id: { $notIn: [14] } }, // исключаем корневую категорию — там висят уцененные без цены
+        category: { id: { $notIn: [14] } },
       },
     });
 
@@ -553,14 +560,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    // Генерируем случайный offset и берём count товаров с этой позиции.
-    // Если offset + count выходит за пределы — берём с конца.
     const maxOffset = Math.max(0, total - count);
     const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        category: { id: { $notIn: [14] } }, // исключаем корневую категорию
+        category: { id: { $notIn: [14] } },
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
       populate: {
