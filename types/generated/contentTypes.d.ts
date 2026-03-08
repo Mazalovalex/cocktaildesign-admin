@@ -771,6 +771,39 @@ export interface ApiMoyskladVariantMoyskladVariant
   };
 }
 
+export interface ApiWeeklyProductBlockWeeklyProductBlock
+  extends Struct.SingleTypeSchema {
+  collectionName: 'weekly_product_blocks';
+  info: {
+    displayName: '\u0422\u043E\u0432\u0430\u0440 \u043D\u0435\u0434\u0435\u043B\u0438';
+    pluralName: 'weekly-product-blocks';
+    singularName: 'weekly-product-block';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    isEnabled: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::weekly-product-block.weekly-product-block'
+    > &
+      Schema.Attribute.Private;
+    product: Schema.Attribute.Relation<
+      'oneToOne',
+      'api::moysklad-product.moysklad-product'
+    >;
+    publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface PluginContentReleasesRelease
   extends Struct.CollectionTypeSchema {
   collectionName: 'strapi_releases';
@@ -1288,6 +1321,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
+      'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;
       'plugin::content-releases.release': PluginContentReleasesRelease;
       'plugin::content-releases.release-action': PluginContentReleasesReleaseAction;
       'plugin::i18n.locale': PluginI18NLocale;
