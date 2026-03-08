@@ -62,6 +62,17 @@ export interface BlocksTextBlock extends Struct.ComponentSchema {
   };
 }
 
+export interface ProductHarakteristika extends Struct.ComponentSchema {
+  collectionName: 'components_product_harakteristika';
+  info: {
+    displayName: '\u0425\u0430\u0440\u0430\u043A\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043A\u0430';
+  };
+  attributes: {
+    label: Schema.Attribute.String & Schema.Attribute.Required;
+    value: Schema.Attribute.String & Schema.Attribute.Required;
+  };
+}
+
 declare module '@strapi/strapi' {
   export module Public {
     export interface ComponentSchemas {
@@ -70,6 +81,7 @@ declare module '@strapi/strapi' {
       'blocks.link-block': BlocksLinkBlock;
       'blocks.list-block': BlocksListBlock;
       'blocks.text-block': BlocksTextBlock;
+      'product.harakteristika': ProductHarakteristika;
     }
   }
 }

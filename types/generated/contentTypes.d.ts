@@ -706,6 +706,8 @@ export interface ApiMoyskladProductMoyskladProduct
     slug: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
+    specifications: Schema.Attribute.Component<'product.harakteristika', true> &
+      Schema.Attribute.Required;
     type: Schema.Attribute.Enumeration<['product', 'bundle']> &
       Schema.Attribute.Required &
       Schema.Attribute.DefaultTo<'product'>;

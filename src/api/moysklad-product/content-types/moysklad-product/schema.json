@@ -15,6 +15,12 @@
       "type": "string",
       "required": true
     },
+    "specifications": {
+      "type": "component",
+      "component": "product.harakteristika",
+      "repeatable": true,
+      "required": true
+    },
     "moyskladId": {
       "type": "string",
       "required": true,
