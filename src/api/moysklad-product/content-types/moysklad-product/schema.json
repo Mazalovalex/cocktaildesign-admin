@@ -37,6 +37,10 @@
     "description": {
       "type": "text"
     },
+    "engravingEnabled": {
+      "type": "boolean",
+      "default": false
+    },
     "category": {
       "type": "relation",
       "relation": "manyToOne",

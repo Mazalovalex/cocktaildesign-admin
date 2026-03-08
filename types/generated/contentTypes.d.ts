@@ -685,6 +685,8 @@ export interface ApiMoyskladProductMoyskladProduct
       Schema.Attribute.Private;
     description: Schema.Attribute.Text;
     displayTitle: Schema.Attribute.String;
+    engravingEnabled: Schema.Attribute.Boolean &
+      Schema.Attribute.DefaultTo<false>;
     href: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;

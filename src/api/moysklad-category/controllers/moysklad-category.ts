@@ -393,8 +393,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       },
     });
 
-    strapi.log.info(`productBySlug raw product: ${JSON.stringify(product, null, 2)}`);
-
     if (!product) {
       ctx.status = 404;
       ctx.body = { error: "not_found" };
