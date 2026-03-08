@@ -177,6 +177,12 @@ type ProductRow = {
   priceOld?: number | null;
   description?: string | null;
 
+  // Артикул товара из МойСклад
+  code?: string | null;
+
+  // Флаг гравировки — выставляется вручную в Strapi
+  engravingEnabled?: boolean | null;
+
   image?: unknown;
   category?: { id?: number | null; name?: string | null } | null;
 
@@ -284,7 +290,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       where: {
         category: { id: { $in: categoryIds } },
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
+      // engravingEnabled нужен здесь — карточки в гриде тоже показывают тоггл
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
@@ -306,6 +313,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           slug: p.slug ?? null,
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
+          // флаг гравировки для карточки в каталоге
+          engravingEnabled: p.engravingEnabled ?? false,
           image: (p as any).image ?? null,
         },
       })),
@@ -333,7 +342,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       where: {
         id: { $in: ids },
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
@@ -358,6 +367,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           slug: p.slug ?? null,
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
+          engravingEnabled: p.engravingEnabled ?? false,
           image: (p as any).image ?? null,
         },
       })),
@@ -381,7 +391,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const product: ProductRow | null = await productQuery.findOne({
       where: { slug },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description"],
+      // Добавили engravingEnabled и code в select
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description", "engravingEnabled", "code"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id"] },
@@ -446,6 +457,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           description: product.description ?? null,
           image: Array.isArray((product as any).image) ? (product as any).image : [],
           specifications,
+          // Новые поля — гравировка и артикул
+          engravingEnabled: product.engravingEnabled ?? false,
+          code: product.code ?? null,
         },
       },
       variants,
