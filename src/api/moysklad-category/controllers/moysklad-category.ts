@@ -124,18 +124,16 @@ function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] })
   let currentId: number | null = startId;
 
   while (currentId) {
-    if (visited.has(currentId)) break; // защита от циклов
+    if (visited.has(currentId)) break;
     visited.add(currentId);
 
     const node = byId.get(currentId);
     if (!node) break;
 
-    // скрываем технический root витрины
     if (node.id !== CATALOG_ROOT_PARENT_ID) {
       const slug = typeof node.slug === "string" ? node.slug.trim() : "";
       const name = typeof node.name === "string" ? node.name.trim() : "";
 
-      // slug/name обязательны для UI-крошек
       if (slug && name) {
         chain.push({
           id: String(node.id),
@@ -149,7 +147,6 @@ function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] })
     currentId = parentId ? parentId : null;
   }
 
-  // сейчас chain: [лист, ..., корень] → разворачиваем
   chain.reverse();
   return chain;
 }
@@ -184,8 +181,6 @@ type ProductRow = {
   category?: { id?: number | null; name?: string | null } | null;
 
   specifications?: ProductSpecificationRow[] | null;
-
-  // ✅ variants (populate)
   variants?: VariantRow[] | null;
 };
 
@@ -258,7 +253,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
-    // 1) Находим категорию по slug
     const rootCategory: { id: number } | null = await categoryQuery.findOne({
       where: { slug: categorySlug },
       select: ["id"],
@@ -269,7 +263,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    // 2) Берём все категории (id + parent.id), строим список потомков
     const allCategories = await categoryQuery.findMany({
       select: ["id"],
       populate: { parent: { select: ["id"] } },
@@ -281,27 +274,22 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       all: allCategories as any,
     });
 
-    // 3) total — отдельным запросом
     const total = await productQuery.count({
       where: {
         category: { id: { $in: categoryIds } },
       },
     });
 
-    // 4) items — порция товаров
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         category: { id: { $in: categoryIds } },
       },
-
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
-
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
         },
       },
-
       orderBy: { id: "desc" },
       limit,
       offset,
@@ -345,15 +333,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       where: {
         id: { $in: ids },
       },
-
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
-
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
         },
       },
-
       limit: 100,
     });
 
@@ -400,17 +385,15 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id"] },
-
-        specifications: {
-          select: ["id", "label", "value", "href"],
-        },
-
+        specifications: true,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
           orderBy: { id: "asc" },
         },
       },
     });
+
+    strapi.log.info(`productBySlug raw product: ${JSON.stringify(product, null, 2)}`);
 
     if (!product) {
       ctx.status = 404;
@@ -467,7 +450,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           specifications,
         },
       },
-
       variants,
       breadcrumbsCategories,
     };
@@ -475,18 +457,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/search?q=шейкер
-   *
-   * Поиск товаров по названию (частичное совпадение, без учёта регистра).
-   *
-   * Параметры:
-   *  - q: строка поиска (обязательный, минимум 2 символа)
-   *
-   * Ответ:
-   *  { items: [ { id, attributes: { name, slug, price, priceOld, image, categoryName } } ] }
-   *
-   * Важно:
-   *  - максимум 10 результатов (для поисковой панели этого достаточно)
-   *  - возвращаем categoryName чтобы фронт мог показать подкатегорию под названием товара
    */
   async search(ctx) {
     const q = String(ctx.query.q ?? "").trim();
@@ -503,9 +473,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         name: { $containsi: q },
         category: { id: { $notIn: [14] } },
       },
-
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
-
       populate: {
         image: {
           select: ["url", "alternativeText", "formats"],
@@ -514,7 +482,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           select: ["name"],
         },
       },
-
       orderBy: { id: "desc" },
       limit: 10,
     });
@@ -537,12 +504,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/random-products?count=2
-   *
-   * Возвращает N случайных товаров из всей базы.
-   * Используется в виджете поиска (idle состояние).
-   *
-   * Параметры:
-   *  - count: количество товаров (по умолчанию 2, максимум 6)
    */
   async randomProducts(ctx) {
     const count = Math.min(Math.max(Number(ctx.query.count ?? 2), 1), 6);
