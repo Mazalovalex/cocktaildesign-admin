@@ -1,0 +1,30 @@
+{
+  "kind": "collectionType",
+  "collectionName": "category_product_shelves",
+  "info": {
+    "singularName": "category-product-shelf",
+    "pluralName": "category-product-shelves",
+    "displayName": "Товарная полка категории"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "category": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::moysklad-category.moysklad-category"
+    },
+    "title": {
+      "type": "string"
+    },
+    "isEnabled": {
+      "type": "boolean",
+      "default": true
+    },
+    "sortOrder": {
+      "type": "integer"
+    }
+  }
+}

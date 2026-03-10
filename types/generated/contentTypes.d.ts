@@ -466,6 +466,41 @@ export interface ApiCatalogCollectionCatalogCollection
   };
 }
 
+export interface ApiCategoryProductShelfCategoryProductShelf
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'category_product_shelves';
+  info: {
+    displayName: '\u0422\u043E\u0432\u0430\u0440\u043D\u0430\u044F \u043F\u043E\u043B\u043A\u0430 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438';
+    pluralName: 'category-product-shelves';
+    singularName: 'category-product-shelf';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    category: Schema.Attribute.Relation<
+      'oneToOne',
+      'api::moysklad-category.moysklad-category'
+    >;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    isEnabled: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::category-product-shelf.category-product-shelf'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    sortOrder: Schema.Attribute.Integer;
+    title: Schema.Attribute.String;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiColorColor extends Struct.CollectionTypeSchema {
   collectionName: 'colors';
   info: {
@@ -1315,6 +1350,7 @@ declare module '@strapi/strapi' {
       'admin::transfer-token-permission': AdminTransferTokenPermission;
       'admin::user': AdminUser;
       'api::catalog-collection.catalog-collection': ApiCatalogCollectionCatalogCollection;
+      'api::category-product-shelf.category-product-shelf': ApiCategoryProductShelfCategoryProductShelf;
       'api::color.color': ApiColorColor;
       'api::knowledge-item.knowledge-item': ApiKnowledgeItemKnowledgeItem;
       'api::moysklad-bundle-item.moysklad-bundle-item': ApiMoyskladBundleItemMoyskladBundleItem;
