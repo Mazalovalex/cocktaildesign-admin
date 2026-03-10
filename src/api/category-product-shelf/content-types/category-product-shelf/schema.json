@@ -19,10 +19,6 @@
     "title": {
       "type": "string"
     },
-    "isEnabled": {
-      "type": "boolean",
-      "default": true
-    },
     "sortOrder": {
       "type": "integer"
     }
