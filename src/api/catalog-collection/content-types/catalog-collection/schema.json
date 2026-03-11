@@ -26,11 +26,23 @@
     "sortOrder": {
       "type": "integer"
     },
+    "selectionMode": {
+      "type": "enumeration",
+      "enum": [
+        "manual",
+        "category"
+      ]
+    },
     "products": {
       "type": "relation",
       "relation": "manyToMany",
       "target": "api::moysklad-product.moysklad-product",
       "inversedBy": "catalog_collections"
+    },
+    "sourceCategory": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::moysklad-category.moysklad-category"
     }
   }
 }
