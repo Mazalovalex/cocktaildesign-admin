@@ -334,20 +334,11 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
-    const where = {
-      price: { $gt: 0 },
-      priceOld: { $gt: 0 },
-      $expr: {
-        $gt: ["priceOld", "price"],
-      },
-    } as any;
-
-    const total = await productQuery.count({
-      where,
-    });
-
     const rows: ProductRow[] = await productQuery.findMany({
-      where,
+      where: {
+        price: { $gt: 0 },
+        priceOld: { $gt: 0 },
+      },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
       populate: {
         image: {
@@ -355,14 +346,22 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         },
       },
       orderBy: { id: "desc" },
-      limit,
-      offset,
+      limit: 100000,
     });
 
-    const hasMore = offset + rows.length < total;
+    const discountedRows = rows.filter((product) => {
+      const price = typeof product.price === "number" ? product.price : 0;
+      const priceOld = typeof product.priceOld === "number" ? product.priceOld : 0;
+
+      return price > 0 && priceOld > price;
+    });
+
+    const total = discountedRows.length;
+    const paginatedRows = discountedRows.slice(offset, offset + limit);
+    const hasMore = offset + paginatedRows.length < total;
 
     ctx.body = {
-      items: rows.map((p) => ({
+      items: paginatedRows.map((p) => ({
         id: p.id,
         attributes: {
           name: p.name ?? null,
@@ -380,7 +379,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       hasMore,
     };
   },
-
   /**
    * GET /api/catalog/products-by-ids
    */
