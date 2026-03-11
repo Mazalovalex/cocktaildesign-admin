@@ -30,7 +30,8 @@
       "type": "enumeration",
       "enum": [
         "manual",
-        "category"
+        "category",
+        "discount"
       ]
     },
     "products": {

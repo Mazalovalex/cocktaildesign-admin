@@ -457,7 +457,9 @@ export interface ApiCatalogCollectionCatalogCollection
       'api::moysklad-product.moysklad-product'
     >;
     publishedAt: Schema.Attribute.DateTime;
-    selectionMode: Schema.Attribute.Enumeration<['manual', 'category']>;
+    selectionMode: Schema.Attribute.Enumeration<
+      ['manual', 'category', 'discount']
+    >;
     slug: Schema.Attribute.UID<'title'> & Schema.Attribute.Required;
     sortOrder: Schema.Attribute.Integer;
     sourceCategory: Schema.Attribute.Relation<
