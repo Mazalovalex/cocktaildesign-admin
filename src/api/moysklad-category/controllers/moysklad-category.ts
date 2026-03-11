@@ -326,6 +326,62 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
   },
 
   /**
+   * GET /api/catalog/products-discounted
+   */
+  async productsDiscounted(ctx) {
+    const limit = toSafeLimit(ctx.query.limit, 50);
+    const offset = toSafeOffset(ctx.query.offset);
+
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    const where = {
+      price: { $gt: 0 },
+      priceOld: { $gt: 0 },
+      $expr: {
+        $gt: ["priceOld", "price"],
+      },
+    } as any;
+
+    const total = await productQuery.count({
+      where,
+    });
+
+    const rows: ProductRow[] = await productQuery.findMany({
+      where,
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      populate: {
+        image: {
+          select: ["url", "alternativeText", "formats"],
+        },
+      },
+      orderBy: { id: "desc" },
+      limit,
+      offset,
+    });
+
+    const hasMore = offset + rows.length < total;
+
+    ctx.body = {
+      items: rows.map((p) => ({
+        id: p.id,
+        attributes: {
+          name: p.name ?? null,
+          moyskladId: p.moyskladId ?? null,
+          slug: p.slug ?? null,
+          price: p.price ?? null,
+          priceOld: p.priceOld ?? null,
+          engravingEnabled: p.engravingEnabled ?? false,
+          image: (p as any).image ?? null,
+        },
+      })),
+      total,
+      limit,
+      offset,
+      hasMore,
+    };
+  },
+
+  /**
    * GET /api/catalog/products-by-ids
    */
   async productsByIds(ctx) {

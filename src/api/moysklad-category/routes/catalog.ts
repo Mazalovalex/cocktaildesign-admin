@@ -24,6 +24,15 @@ export default {
       },
     },
 
+    {
+      method: "GET",
+      path: "/catalog/products-discounted",
+      handler: "moysklad-category.productsDiscounted",
+      config: {
+        auth: false,
+      },
+    },
+
     // ----------------------------------------------------------------------------
     // Получить товары по массиву Strapi id
     // ----------------------------------------------------------------------------
