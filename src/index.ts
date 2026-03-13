@@ -18,24 +18,35 @@ export default {
 
     // ─────────────────────────────────────────────────────────
     // Автосинк МойСклад → Strapi
-    //
-    // Расписание: каждые 2 часа с 8:00 до 22:00 + один раз в 3:00 ночи.
-    // Порядок всегда: категории → продукты → варианты.
-    // Если один шаг упал — следующие не запускаются, ошибка логируется.
     // ─────────────────────────────────────────────────────────
 
     const secret = process.env.MOYSKLAD_WEBHOOK_SECRET;
     const apiBase = process.env.STRAPI_SELF_URL ?? "http://localhost:1337";
+    const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+    const tgChatId = process.env.TELEGRAM_CHAT_ID;
 
     if (!secret) {
       strapi.log.warn("[moysklad-cron] MOYSKLAD_WEBHOOK_SECRET не задан — автосинк отключён");
       return;
     }
 
-    // Функция запускает один POST-запрос к нашему же API
+    // Отправка сообщения в Telegram
+    async function sendTelegram(text: string): Promise<void> {
+      if (!tgToken || !tgChatId) return;
+      try {
+        await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: tgChatId, text, parse_mode: "HTML" }),
+        });
+      } catch (err) {
+        strapi.log.warn(`[moysklad-cron] Telegram недоступен: ${String(err)}`);
+      }
+    }
+
+    // Один POST-запрос к нашему же API
     async function callSync(path: string): Promise<void> {
       const url = `${apiBase}/api/moysklad/sync/${path}`;
-
       const res = await fetch(url, {
         method: "POST",
         headers: {
@@ -43,7 +54,6 @@ export default {
           "Content-Type": "application/json",
         },
       });
-
       if (!res.ok) {
         const text = await res.text();
         throw new Error(`${path} вернул ${res.status}: ${text}`);
@@ -52,6 +62,7 @@ export default {
 
     // Полный синк: категории → продукты → варианты
     async function runFullSync(): Promise<void> {
+      const startedAt = new Date().toLocaleString("ru-RU", { timeZone: "Europe/Moscow" });
       strapi.log.info("[moysklad-cron] ▶ Запуск автосинка");
 
       try {
@@ -65,8 +76,11 @@ export default {
         await callSync("variants");
 
         strapi.log.info("[moysklad-cron] ✅ Автосинк завершён успешно");
+        await sendTelegram(`✅ <b>Синк завершён</b>\n🕐 ${startedAt}\n\nКатегории → Продукты → Варианты обновлены`);
       } catch (err) {
-        strapi.log.error(`[moysklad-cron] ❌ Ошибка автосинка: ${String(err)}`);
+        const msg = String(err);
+        strapi.log.error(`[moysklad-cron] ❌ Ошибка автосинка: ${msg}`);
+        await sendTelegram(`❌ <b>Ошибка синка</b>\n🕐 ${startedAt}\n\n${msg}`);
       }
     }
 
