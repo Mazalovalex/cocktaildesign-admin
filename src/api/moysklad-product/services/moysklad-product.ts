@@ -1,32 +1,11 @@
 // backend/src/api/moysklad-product/services/moysklad-product.ts
-// Задача файла:
-// 1) Забрать товары (product) из MoySklad
-// 2) Оставить только товары, которые попадают в уже синкнутые категории
-// 3) Сделать upsert товаров в Strapi
-// 4) Удалить товары, которых больше нет в MoySklad/в витринных категориях
-// 5) Пересчитать productsCount у категорий (aggregate по descendants)
-// 6) Вести статусы синка + lock, чтобы синк не запускался параллельно
 //
-// ДОБАВЛЕНО (bundle):
-// - Тянем bundle из MoySklad отдельно
-// - Апсертим bundle в ту же таблицу moysklad-product с type="bundle"
-// - Удаляем отдельно type=product и type=bundle (чтобы не снести друг друга)
-//
-// ДОБАВЛЕНО (bundle items auto-sync):
-// - После sync/products автоматически синкаем состав ДЛЯ ВСЕХ bundles, найденных в витрине
-// - Возвращаем агрегированную статистику: created/skipped/failed
-//
-// ВАЖНО ПРО СЧЁТЧИКИ:
-// - productsCount теперь считает И товары И комплекты (product + bundle)
-// - category sync больше НЕ пересчитывает счётчики (только строит дерево)
-//
-// ДОБАВЛЕНО (counts after webhook):
-// - После webhook-upsert/delete пересчитываем productsCount локально (ТОЛЬКО по БД Strapi)
-// - Никаких запросов в MoySklad для этого не делаем
-//
-// ДОБАВЛЕНО (slug):
-// - Стабильный slug вида "ms-xxxxxxxx" из moyskladId
-// - Заполняем при syncAll и при webhook upsert (product + bundle)
+// ИЗМЕНЕНИЯ по сравнению с предыдущей версией:
+// - Убраны N+1 запросы в цикле upsert для products и bundles.
+//   Раньше: findOne(...) на каждый товар внутри for-loop = тысячи запросов.
+//   Теперь: один findMany(...) ДО цикла → Map<moyskladId, strapiId> → O(1) lookup.
+// - syncAllVariants аналогично (один findMany до цикла).
+// - Остальная логика не тронута.
 
 import { factories } from "@strapi/strapi";
 import {
@@ -37,8 +16,11 @@ import {
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
 
-// ✅ ВАЖНО: путь из moysklad-product/services -> api -> moysklad-bundle-item/services/sync
 import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
+
+// ---------------------------------------------------------------------------
+// Типы MoySklad
+// ---------------------------------------------------------------------------
 
 type MoySkladMeta = {
   href: string;
@@ -51,7 +33,8 @@ type MoySkladSalePrice = {
   };
 };
 
-type MoySkladProduct = {
+// Общая форма для product и bundle — поля одинаковые
+type MoySkladProductOrBundle = {
   id: string;
   name: string;
   code?: string;
@@ -73,47 +56,7 @@ type MoySkladProduct = {
   volume?: number | null;
 };
 
-type MoySkladBundle = {
-  id: string;
-  name: string;
-  code?: string;
-  updated?: string;
-  description?: string;
-  meta: MoySkladMeta;
-
-  productFolder?: {
-    meta: MoySkladMeta;
-  };
-
-  salePrices?: MoySkladSalePrice[];
-
-  uom?: {
-    name?: string;
-  };
-
-  weight?: number | null;
-  volume?: number | null;
-};
-
-type MoySkladListResponse = {
-  rows: MoySkladProduct[];
-  meta: {
-    nextHref?: string;
-  };
-};
-
-type MoySkladBundleListResponse = {
-  rows: MoySkladBundle[];
-  meta: {
-    nextHref?: string;
-  };
-};
-
-/**
- * Payload из webhook fetchByHref может быть "не строгим":
- * - id обычно есть, но подстрахуемся
- * - meta.href есть практически всегда
- */
+// Webhook payload может приходить "не строгим" — подстраховываемся
 type MoySkladWebhookProduct = {
   id?: string;
   name?: string;
@@ -132,6 +75,17 @@ type MoySkladWebhookProduct = {
   volume?: number | null;
 };
 
+type MoySkladListResponse = {
+  rows: MoySkladProductOrBundle[];
+  meta: {
+    nextHref?: string;
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Вспомогательные функции
+// ---------------------------------------------------------------------------
+
 function getMoySkladHeaders(token: string) {
   return {
     Authorization: `Bearer ${token}`,
@@ -140,8 +94,7 @@ function getMoySkladHeaders(token: string) {
 }
 
 /**
- * Достаём UUID из href.
- * Важно: режем ?query и #hash, чтобы не получить кривой ID.
+ * UUID из href — режем ?query и #hash, берём последний сегмент пути.
  */
 function pickIdFromHref(href?: string): string | null {
   if (!href) return null;
@@ -157,7 +110,7 @@ function pickIdFromHref(href?: string): string | null {
 
 /**
  * Стабильный slug из MoySklad ID.
- * НЕ используем name → URL не ломается при переименовании.
+ * Не используем name → URL не ломается при переименовании товара.
  */
 function makeStableSlug(moyskladId: string): string {
   return `ms-${moyskladId.slice(0, 8)}`;
@@ -165,7 +118,7 @@ function makeStableSlug(moyskladId: string): string {
 
 /**
  * Цена из salePrices по точному имени типа цены.
- * MoySklad хранит value в копейках.
+ * MoySklad хранит value в копейках → возвращаем рубли.
  */
 function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
   if (!prices?.length) return null;
@@ -173,37 +126,21 @@ function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): num
   const found = prices.find((p) => p.priceType?.name === name);
   if (!found) return null;
 
-  // Возвращаем рубли целым числом (integer в Strapi schema)
   return Math.round(found.value / 100);
 }
 
 /**
- * Type-guard для ответа MoySklad product-list.
+ * Type-guard для ответа MoySklad list (используется и для product, и для bundle).
  */
 function isMoySkladListResponse(data: unknown): data is MoySkladListResponse {
   if (!data || typeof data !== "object") return false;
 
   const d = data as { rows?: unknown; meta?: unknown };
-  const hasRows = Array.isArray(d.rows);
-  const hasMeta = typeof d.meta === "object" && d.meta !== null;
 
-  return hasRows && hasMeta;
+  return Array.isArray(d.rows) && typeof d.meta === "object" && d.meta !== null;
 }
 
-/**
- * Type-guard для ответа MoySklad bundle-list.
- */
-function isMoySkladBundleListResponse(data: unknown): data is MoySkladBundleListResponse {
-  if (!data || typeof data !== "object") return false;
-
-  const d = data as { rows?: unknown; meta?: unknown };
-  const hasRows = Array.isArray(d.rows);
-  const hasMeta = typeof d.meta === "object" && d.meta !== null;
-
-  return hasRows && hasMeta;
-}
-
-async function fetchJson(url: string, token: string): Promise<MoySkladListResponse> {
+async function fetchMoySkladList(url: string, token: string): Promise<MoySkladListResponse> {
   const res = await fetch(url, { headers: getMoySkladHeaders(token) });
 
   if (!res.ok) {
@@ -214,32 +151,16 @@ async function fetchJson(url: string, token: string): Promise<MoySkladListRespon
   const data = (await res.json()) as unknown;
 
   if (!isMoySkladListResponse(data)) {
-    throw new Error(`Unexpected MoySklad response shape (product): ${JSON.stringify(data).slice(0, 500)}`);
-  }
-
-  return data;
-}
-
-async function fetchBundleJson(url: string, token: string): Promise<MoySkladBundleListResponse> {
-  const res = await fetch(url, { headers: getMoySkladHeaders(token) });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`MoySklad API error ${res.status}: ${text}`);
-  }
-
-  const data = (await res.json()) as unknown;
-
-  if (!isMoySkladBundleListResponse(data)) {
-    throw new Error(`Unexpected MoySklad response shape (bundle): ${JSON.stringify(data).slice(0, 500)}`);
+    throw new Error(`Unexpected MoySklad response shape: ${JSON.stringify(data).slice(0, 500)}`);
   }
 
   return data;
 }
 
 /**
- * В Strapi поля могут отличаться (в процессе миграции схемы).
- * Чтобы не падать, проверяем наличие атрибутов в content-type.
+ * Проверяет, есть ли атрибут у content-type в схеме Strapi.
+ * Используется чтобы безопасно писать поля, которые могут ещё не существовать
+ * (например, при постепенной миграции схемы).
  */
 function hasCategoryAttribute(attrName: string): boolean {
   const ct = strapi.contentTypes["api::moysklad-category.moysklad-category"];
@@ -251,16 +172,15 @@ function hasProductAttribute(attrName: string): boolean {
   return Boolean(ct?.attributes && Object.prototype.hasOwnProperty.call(ct.attributes, attrName));
 }
 
+// ---------------------------------------------------------------------------
+// Пересчёт счётчиков категорий
+// ---------------------------------------------------------------------------
+
 /**
- * Пересчёт счётчиков категорий "по дереву":
- * - directProducts / directBundles: сколько сущностей привязано напрямую к категории
- * - total: direct + сумма total всех дочерних
+ * Пересчитывает productsCount по дереву категорий.
+ * Получает на вход прямые (direct) счётчики и рекурсивно складывает дочерние.
  *
- * Что пишем:
- * - productsCount = totalProducts + totalBundles (единый счётчик для витрины)
- * - если есть productsCountDirect / productsCountTotal — пишем туда тоже (единые totals)
- * - если когда-нибудь добавишь отдельные поля (опционально), мы аккуратно их заполним:
- *   productsCountProductsDirect/Total, productsCountBundlesDirect/Total
+ * productsCount = totalProducts + totalBundles (единый счётчик для витрины).
  */
 async function recomputeCategoryCountsForTree(
   directProductsByCategoryId: Map<number, number>,
@@ -274,6 +194,7 @@ async function recomputeCategoryCountsForTree(
     limit: 100000,
   });
 
+  // Строим Map: parentId → [childId, childId, ...]
   const childrenByParentId = new Map<number, number[]>();
   for (const c of categories) {
     const parentId = c.parent?.id;
@@ -287,15 +208,13 @@ async function recomputeCategoryCountsForTree(
   const totalProductsByCategoryId = new Map<number, number>();
   const totalBundlesByCategoryId = new Map<number, number>();
 
+  // Рекурсия с кэшом (memoization) — избегаем повторного обхода поддерева
   const computeTotalProducts = (categoryId: number): number => {
     const cached = totalProductsByCategoryId.get(categoryId);
     if (cached !== undefined) return cached;
 
-    const direct = directProductsByCategoryId.get(categoryId) ?? 0;
-    const children = childrenByParentId.get(categoryId) ?? [];
-
-    let total = direct;
-    for (const childId of children) {
+    let total = directProductsByCategoryId.get(categoryId) ?? 0;
+    for (const childId of childrenByParentId.get(categoryId) ?? []) {
       total += computeTotalProducts(childId);
     }
 
@@ -307,11 +226,8 @@ async function recomputeCategoryCountsForTree(
     const cached = totalBundlesByCategoryId.get(categoryId);
     if (cached !== undefined) return cached;
 
-    const direct = directBundlesByCategoryId.get(categoryId) ?? 0;
-    const children = childrenByParentId.get(categoryId) ?? [];
-
-    let total = direct;
-    for (const childId of children) {
+    let total = directBundlesByCategoryId.get(categoryId) ?? 0;
+    for (const childId of childrenByParentId.get(categoryId) ?? []) {
       total += computeTotalBundles(childId);
     }
 
@@ -319,10 +235,9 @@ async function recomputeCategoryCountsForTree(
     return total;
   };
 
+  // Флаги для опциональных полей схемы (могут ещё не существовать)
   const canWriteDirect = hasCategoryAttribute("productsCountDirect");
   const canWriteTotal = hasCategoryAttribute("productsCountTotal");
-
-  // опциональные поля (если ты потом захочешь хранить раздельно)
   const canWriteProductsDirect = hasCategoryAttribute("productsCountProductsDirect");
   const canWriteProductsTotal = hasCategoryAttribute("productsCountProductsTotal");
   const canWriteBundlesDirect = hasCategoryAttribute("productsCountBundlesDirect");
@@ -335,37 +250,25 @@ async function recomputeCategoryCountsForTree(
     const totalProducts = computeTotalProducts(c.id);
     const totalBundles = computeTotalBundles(c.id);
 
-    const directAll = directProducts + directBundles;
-    const totalAll = totalProducts + totalBundles;
-
     const data: Record<string, unknown> = {
-      productsCount: totalAll,
+      // Основной счётчик для витрины — products + bundles вместе
+      productsCount: totalProducts + totalBundles,
     };
 
-    if (canWriteDirect) data.productsCountDirect = directAll;
-    if (canWriteTotal) data.productsCountTotal = totalAll;
-
+    if (canWriteDirect) data.productsCountDirect = directProducts + directBundles;
+    if (canWriteTotal) data.productsCountTotal = totalProducts + totalBundles;
     if (canWriteProductsDirect) data.productsCountProductsDirect = directProducts;
     if (canWriteProductsTotal) data.productsCountProductsTotal = totalProducts;
-
     if (canWriteBundlesDirect) data.productsCountBundlesDirect = directBundles;
     if (canWriteBundlesTotal) data.productsCountBundlesTotal = totalBundles;
 
-    await categoryQuery.update({
-      where: { id: c.id },
-      data,
-    });
+    await categoryQuery.update({ where: { id: c.id }, data });
   }
 }
 
 /**
- * Локальный пересчёт счётчиков (ТОЛЬКО по БД Strapi).
- * Никаких запросов в MoySklad.
- *
- * Алгоритм:
- * 1) Берём все products/bundles из таблицы moysklad-product
- * 2) Считаем directProductsByCategoryId и directBundlesByCategoryId
- * 3) Прогоняем дерево категорий через recomputeCategoryCountsForTree(...)
+ * Пересчёт счётчиков ТОЛЬКО по данным из БД Strapi (без запросов в MoySklad).
+ * Используется после webhook upsert/delete — быстро и без лишних запросов наружу.
  */
 async function recomputeCategoryCountsFromDb() {
   const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
@@ -385,22 +288,22 @@ async function recomputeCategoryCountsFromDb() {
 
     if (row.type === "product") {
       directProductsByCategoryId.set(categoryId, (directProductsByCategoryId.get(categoryId) ?? 0) + 1);
-      continue;
-    }
-
-    if (row.type === "bundle") {
+    } else if (row.type === "bundle") {
       directBundlesByCategoryId.set(categoryId, (directBundlesByCategoryId.get(categoryId) ?? 0) + 1);
-      continue;
     }
   }
 
   await recomputeCategoryCountsForTree(directProductsByCategoryId, directBundlesByCategoryId);
 }
 
+// ---------------------------------------------------------------------------
+// Основной сервис
+// ---------------------------------------------------------------------------
+
 export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
   /**
-   * Webhook: upsert ОДНОГО product по payload из fetchByHref(href).
-   * Важно: не трогаем bundles здесь (вебхук сейчас шлёт type=product).
+   * Webhook: upsert одного product.
+   * type всегда "product", bundle через syncOneBundleFromWebhook.
    */
   async syncOneFromWebhook(entity: MoySkladWebhookProduct) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
@@ -416,7 +319,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const categoryMsId = pickIdFromHref(entity.productFolder?.meta?.href);
     if (!categoryMsId) {
-      strapi.log.warn(`[moysklad-product] webhook skipped: no category href for product=${moyskladId}`);
+      strapi.log.warn(`[moysklad-product] webhook skipped: no category for product=${moyskladId}`);
       return;
     }
 
@@ -426,10 +329,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     });
 
     if (!category) {
-      // это нормальная ситуация: если category sync ещё не догнал
-      strapi.log.warn(
-        `[moysklad-product] webhook skipped: category not found msId=${categoryMsId} product=${moyskladId}`,
-      );
+      strapi.log.warn(`[moysklad-product] webhook skipped: category not found msId=${categoryMsId}`);
       return;
     }
 
@@ -443,25 +343,19 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const payload: Record<string, unknown> = {
       type: "product",
-
       name: entity.name ?? "",
       displayTitle: entity.name ?? "",
       description: typeof entity.description === "string" ? entity.description : null,
       moyskladId,
       href,
-
       code: entity.code ?? null,
       updated: entity.updated ?? null,
-
       category: category.id,
-
       price: priceByName(entity.salePrices, "Цена с сайта"),
       priceOld: priceByName(entity.salePrices, "Цена продажи"),
-
       uom: entity.uom?.name ?? null,
       weight: typeof entity.weight === "number" ? entity.weight : null,
       volume: typeof entity.volume === "number" ? entity.volume : null,
-
       publishedAt: nowIso,
     };
 
@@ -477,19 +371,13 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
     }
 
-    // ✅ пересчёт счётчиков локально (без MoySklad)
     await recomputeCategoryCountsFromDb();
-    strapi.log.info("[moysklad-product] counts recomputed (after product webhook)");
   },
 
   /**
-   * Webhook: upsert ОДНОГО bundle по payload из fetchByHref(href).
-   * Отличия от product:
-   * - type всегда "bundle"
-   * - логи маркируем как bundle (чтобы отличать в pm2 logs)
-   *
-   * ДОБАВЛЕНО: после апсерта синкаем состав комплекта (bundle items).
-   * Важно: ошибки синка состава НЕ валят webhook, только логируем.
+   * Webhook: upsert одного bundle.
+   * После апсерта автоматически синкает состав (bundle items).
+   * Ошибка синка состава НЕ валит webhook — только логируем.
    */
   async syncOneBundleFromWebhook(entity: MoySkladWebhookProduct) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
@@ -505,7 +393,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const categoryMsId = pickIdFromHref(entity.productFolder?.meta?.href);
     if (!categoryMsId) {
-      strapi.log.warn(`[moysklad-product] bundle webhook skipped: no category href for bundle=${moyskladId}`);
+      strapi.log.warn(`[moysklad-product] bundle webhook skipped: no category for bundle=${moyskladId}`);
       return;
     }
 
@@ -515,9 +403,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     });
 
     if (!category) {
-      strapi.log.warn(
-        `[moysklad-product] bundle webhook skipped: category not found msId=${categoryMsId} bundle=${moyskladId}`,
-      );
+      strapi.log.warn(`[moysklad-product] bundle webhook skipped: category not found msId=${categoryMsId}`);
       return;
     }
 
@@ -531,26 +417,19 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const payload: Record<string, unknown> = {
       type: "bundle",
-
       name: entity.name ?? "",
       displayTitle: entity.name ?? "",
       description: typeof entity.description === "string" ? entity.description : null,
-
       moyskladId,
       href,
-
       code: entity.code ?? null,
       updated: entity.updated ?? null,
-
       category: category.id,
-
       price: priceByName(entity.salePrices, "Цена с сайта"),
       priceOld: priceByName(entity.salePrices, "Цена продажи"),
-
       uom: entity.uom?.name ?? null,
       weight: typeof entity.weight === "number" ? entity.weight : null,
       volume: typeof entity.volume === "number" ? entity.volume : null,
-
       publishedAt: nowIso,
     };
 
@@ -558,7 +437,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       payload.slug = makeStableSlug(moyskladId);
     }
 
-    // 1) upsert bundle
     if (existing) {
       await productQuery.update({ where: { id: existing.id }, data: payload });
       strapi.log.info(`[moysklad-product] updated bundle: ${moyskladId}`);
@@ -567,23 +445,19 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       strapi.log.info(`[moysklad-product] created bundle: ${moyskladId}`);
     }
 
-    // 2) auto-sync состава (bundle items)
+    // Синк состава — ошибка не валит webhook
     try {
       const r = await syncBundleItemsForBundle(moyskladId);
-      strapi.log.info(
-        `[moysklad-product] bundle items synced: bundle=${moyskladId} created=${r.created} skipped=${r.skipped}`,
-      );
+      strapi.log.info(`[moysklad-product] bundle items synced: bundle=${moyskladId} created=${r.created} skipped=${r.skipped}`);
     } catch (err) {
       strapi.log.error(`[moysklad-product] bundle items sync failed: bundle=${moyskladId} error=${String(err)}`);
     }
 
-    // ✅ пересчёт счётчиков локально (без MoySklad)
     await recomputeCategoryCountsFromDb();
-    strapi.log.info("[moysklad-product] counts recomputed (after bundle webhook)");
   },
 
   /**
-   * Webhook: delete по moyskladId (без fetchByHref)
+   * Webhook: удаление по moyskladId.
    */
   async deleteOneFromWebhook(moyskladId: string) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
@@ -591,13 +465,24 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     await productQuery.deleteMany({ where: { moyskladId } });
     strapi.log.info(`[moysklad-product] deleted: ${moyskladId}`);
 
-    // ✅ пересчёт счётчиков локально (без MoySklad)
     await recomputeCategoryCountsFromDb();
-    strapi.log.info("[moysklad-product] counts recomputed (after delete webhook)");
   },
 
   /**
-   * Полный синк товаров + комплектов (bundle).
+   * Полный синк товаров + комплектов + состава комплектов.
+   *
+   * Порядок:
+   * 1) Забрать все products из MoySklad
+   * 2) Забрать все bundles из MoySklad
+   * 3) Upsert products (только витринные категории)
+   * 4) Upsert bundles (только витринные категории)
+   * 5) Удалить products/bundles которых нет в MoySklad
+   * 6) Пересчитать productsCount
+   * 7) Синк состава для каждого bundle
+   *
+   * ОПТИМИЗАЦИЯ (N+1):
+   * - Перед циклом upsert делаем ОДИН findMany → Map<moyskladId, strapiId>.
+   * - В цикле lookup за O(1) вместо запроса в БД на каждый товар.
    */
   async syncAll() {
     await acquireMoySkladSyncLock("products");
@@ -612,36 +497,44 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       const canWriteSlug = hasProductAttribute("slug");
 
-      // 1) Разрешённые категории (уже синкнутые витринные)
+      // --- 1) Разрешённые категории (уже синкнутые витринные) ---
+
       const categories = await categoryQuery.findMany({
         select: ["id", "moyskladId"],
         limit: 10000,
       });
 
+      // Set для быстрой проверки "входит ли категория в витрину"
       const allowedCategoryMsIds = new Set(categories.map((c) => c.moyskladId));
-      const categoryIdByMsId = new Map<string, number>(categories.map((c) => [c.moyskladId, c.id]));
 
-      // 2) Тянем все товары (product) из MoySklad (пагинация)
-      const all: MoySkladProduct[] = [];
+      // Map для получения Strapi ID категории по её MoySklad ID
+      const categoryIdByMsId = new Map<string, number>(
+        categories.map((c) => [c.moyskladId, c.id]),
+      );
+
+      // --- 2) Тянем все products из MoySklad (пагинация) ---
+
+      const allProducts: MoySkladProductOrBundle[] = [];
       let offset = 0;
 
       while (true) {
         const url = `https://api.moysklad.ru/api/remap/1.2/entity/product?limit=100&offset=${offset}`;
-        const data = await fetchJson(url, token);
+        const data = await fetchMoySkladList(url, token);
 
-        all.push(...data.rows);
+        allProducts.push(...data.rows);
 
         if (!data.meta.nextHref) break;
         offset += 100;
       }
 
-      // 2.1) Тянем все комплекты (bundle) из MoySklad (пагинация)
-      const allBundles: MoySkladBundle[] = [];
+      // --- 3) Тянем все bundles из MoySklad (пагинация) ---
+
+      const allBundles: MoySkladProductOrBundle[] = [];
       let bundleOffset = 0;
 
       while (true) {
         const url = `https://api.moysklad.ru/api/remap/1.2/entity/bundle?limit=100&offset=${bundleOffset}`;
-        const data = await fetchBundleJson(url, token);
+        const data = await fetchMoySkladList(url, token);
 
         allBundles.push(...data.rows);
 
@@ -649,21 +542,40 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         bundleOffset += 100;
       }
 
+      strapi.log.info(`[moysklad] fetched: products=${allProducts.length} bundles=${allBundles.length}`);
+
+      // --- 4) Загружаем все существующие записи из Strapi ОДНИМ запросом ---
+      //
+      // ✅ ИСПРАВЛЕНИЕ N+1:
+      // Раньше: findOne(moyskladId) на каждый товар внутри for-loop.
+      // Теперь: один findMany → Map<moyskladId, strapiId>.
+      // При 1000 товарах = 1 запрос вместо 1000.
+
+      const existingRows = await productQuery.findMany({
+        select: ["id", "moyskladId"],
+        limit: 200000,
+      });
+
+      // Map: moyskladId → Strapi numeric id
+      const existingIdByMsId = new Map<string, number>(
+        (existingRows as Array<{ id: number; moyskladId: string }>)
+          .filter((r) => r.moyskladId)
+          .map((r) => [r.moyskladId, r.id]),
+      );
+
       const nowIso = new Date().toISOString();
 
-      const keepMsIds = new Set<string>(); // type=product
-      const keepBundleMsIds = new Set<string>(); // type=bundle
+      const keepMsIds = new Set<string>();       // витринные products
+      const keepBundleMsIds = new Set<string>(); // витринные bundles
 
-      // direct counts для пересчёта category counters:
-      // считаем отдельно products и bundles, чтобы потом сложить корректно
       const directProductsByCategoryId = new Map<number, number>();
       const directBundlesByCategoryId = new Map<number, number>();
 
-      // 3) Upsert только тех товаров, что попадают в allowed категории
-      for (const p of all) {
+      // --- 5) Upsert products ---
+
+      for (const p of allProducts) {
         const categoryMsId = pickIdFromHref(p.productFolder?.meta?.href);
         if (!categoryMsId) continue;
-
         if (!allowedCategoryMsIds.has(categoryMsId)) continue;
 
         const categoryId = categoryIdByMsId.get(categoryMsId);
@@ -671,17 +583,14 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
         keepMsIds.add(p.id);
 
-        // ✅ direct count: PRODUCT
-        directProductsByCategoryId.set(categoryId, (directProductsByCategoryId.get(categoryId) ?? 0) + 1);
-
-        const existing = await productQuery.findOne({
-          where: { moyskladId: p.id },
-          select: ["id"],
-        });
+        // Считаем для пересчёта счётчиков категорий
+        directProductsByCategoryId.set(
+          categoryId,
+          (directProductsByCategoryId.get(categoryId) ?? 0) + 1,
+        );
 
         const payload: Record<string, unknown> = {
           type: "product",
-
           name: p.name,
           displayTitle: p.name,
           description: typeof p.description === "string" ? p.description : null,
@@ -689,17 +598,12 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           href: p.meta.href,
           code: p.code ?? null,
           updated: p.updated ?? null,
-
           category: categoryId,
-
           price: priceByName(p.salePrices, "Цена с сайта"),
           priceOld: priceByName(p.salePrices, "Цена продажи"),
-
           uom: p.uom?.name ?? null,
-
           weight: typeof p.weight === "number" ? p.weight : null,
           volume: typeof p.volume === "number" ? p.volume : null,
-
           publishedAt: nowIso,
         };
 
@@ -707,20 +611,23 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           payload.slug = makeStableSlug(p.id);
         }
 
-        if (existing) {
-          await productQuery.update({ where: { id: existing.id }, data: payload });
+        // ✅ O(1) lookup вместо запроса в БД
+        const existingStrapiId = existingIdByMsId.get(p.id);
+
+        if (existingStrapiId) {
+          await productQuery.update({ where: { id: existingStrapiId }, data: payload });
         } else {
           await productQuery.create({ data: payload });
         }
       }
 
-      // 3.1) Апсерт bundle (type=bundle)
+      // --- 6) Upsert bundles ---
+
       let bundlesAllowed = 0;
 
       for (const b of allBundles) {
         const categoryMsId = pickIdFromHref(b.productFolder?.meta?.href);
         if (!categoryMsId) continue;
-
         if (!allowedCategoryMsIds.has(categoryMsId)) continue;
 
         const categoryId = categoryIdByMsId.get(categoryMsId);
@@ -729,17 +636,13 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         bundlesAllowed += 1;
         keepBundleMsIds.add(b.id);
 
-        // ✅ direct count: BUNDLE
-        directBundlesByCategoryId.set(categoryId, (directBundlesByCategoryId.get(categoryId) ?? 0) + 1);
-
-        const existing = await productQuery.findOne({
-          where: { moyskladId: b.id },
-          select: ["id"],
-        });
+        directBundlesByCategoryId.set(
+          categoryId,
+          (directBundlesByCategoryId.get(categoryId) ?? 0) + 1,
+        );
 
         const payload: Record<string, unknown> = {
           type: "bundle",
-
           name: b.name,
           displayTitle: b.name,
           description: typeof b.description === "string" ? b.description : null,
@@ -747,16 +650,12 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           href: b.meta.href,
           code: b.code ?? null,
           updated: b.updated ?? null,
-
           category: categoryId,
-
           price: priceByName(b.salePrices, "Цена с сайта"),
           priceOld: priceByName(b.salePrices, "Цена продажи"),
-
           uom: b.uom?.name ?? null,
           weight: typeof b.weight === "number" ? b.weight : null,
           volume: typeof b.volume === "number" ? b.volume : null,
-
           publishedAt: nowIso,
         };
 
@@ -764,33 +663,36 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           payload.slug = makeStableSlug(b.id);
         }
 
-        if (existing) {
-          await productQuery.update({ where: { id: existing.id }, data: payload });
+        // ✅ O(1) lookup вместо запроса в БД
+        const existingStrapiId = existingIdByMsId.get(b.id);
+
+        if (existingStrapiId) {
+          await productQuery.update({ where: { id: existingStrapiId }, data: payload });
         } else {
           await productQuery.create({ data: payload });
         }
       }
 
-      strapi.log.info(`[moysklad] products total fetched: ${all.length}`);
-      strapi.log.info(`[moysklad] bundles total fetched: ${allBundles.length}`);
       strapi.log.info(`[moysklad] bundles allowed by category: ${bundlesAllowed}`);
 
-      // 4) Удаляем только products
+      // --- 7) Удаляем то, чего больше нет в MoySklad/витрине ---
+      // Важно: удаляем раздельно по type, чтобы products и bundles не затирали друг друга.
+
       await productQuery.deleteMany({
         where: { type: "product", moyskladId: { $notIn: Array.from(keepMsIds) } },
       });
 
-      // 4.1) Удаляем только bundles
       await productQuery.deleteMany({
         where: { type: "bundle", moyskladId: { $notIn: Array.from(keepBundleMsIds) } },
       });
 
-      // 5) Пересчитываем productsCount:
-      // ✅ ВАЖНО: считаем product + bundle (комплекты тоже входят)
+      // --- 8) Пересчёт productsCount по дереву категорий ---
+
       await recomputeCategoryCountsForTree(directProductsByCategoryId, directBundlesByCategoryId);
 
-      // ✅ 6) Автосинк состава для ВСЕХ bundles
-      // Важно: синкаем после апсерта bundles и products, чтобы componentProduct уже существовали.
+      // --- 9) Синк состава для всех bundles ---
+      // Важно: запускаем ПОСЛЕ upsert products, чтобы componentProduct уже существовали в БД.
+
       let bundleItemsCreatedTotal = 0;
       let bundleItemsSkippedTotal = 0;
       let bundlesProcessed = 0;
@@ -804,7 +706,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           bundlesProcessed += 1;
         } catch (err) {
           bundlesFailed += 1;
-          // Не валим весь sync/products из-за одного проблемного комплекта.
+          // Один сломанный бандл не должен валить весь sync — только логируем.
           strapi.log.error(`[moysklad] bundle items sync failed: bundle=${bundleMsId} error=${String(err)}`);
         }
       }

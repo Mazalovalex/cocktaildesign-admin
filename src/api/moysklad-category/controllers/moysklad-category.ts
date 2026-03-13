@@ -428,98 +428,138 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-  /**
-   * GET /api/catalog/product?slug=ms-xxxxxxx
-   */
-  async productBySlug(ctx) {
-    const slug = String(ctx.query.slug ?? "").trim();
+/**
+ * GET /api/catalog/product?slug=ms-xxxxxxx
+ */
+async productBySlug(ctx) {
+  const slug = String(ctx.query.slug ?? "").trim();
 
-    if (!slug) {
-      ctx.status = 400;
-      ctx.body = { error: "slug_required" };
-      return;
-    }
+  if (!slug) {
+    ctx.status = 400;
+    ctx.body = { error: "slug_required" };
+    return;
+  }
 
-    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
-    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-    const product: ProductRow | null = await productQuery.findOne({
-      where: { slug },
-      // Добавили engravingEnabled и code в select
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description", "engravingEnabled", "code"],
-      populate: {
-        image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["id"] },
-        specifications: true,
-        variants: {
-          select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
-          orderBy: { id: "asc" },
+  const product: ProductRow | null = await productQuery.findOne({
+    where: { slug },
+    select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description", "engravingEnabled", "code"],
+    populate: {
+      image: { select: ["url", "alternativeText", "formats"] },
+      category: { select: ["id"] },
+      specifications: true,
+      variants: {
+        select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
+        orderBy: { id: "asc" },
+      },
+      // Состав комплекта — populate только если это bundle
+      bundleItems: {
+        populate: {
+          componentProduct: {
+            select: ["id", "name", "slug", "price"],
+            populate: {
+              image: { select: ["url", "alternativeText", "formats"] },
+            },
+          },
         },
       },
+    },
+  });
+
+  if (!product) {
+    ctx.status = 404;
+    ctx.body = { error: "not_found" };
+    return;
+  }
+
+  const categoryId = product.category?.id ?? null;
+
+  let breadcrumbsCategories: BreadcrumbCategory[] = [];
+
+  if (categoryId) {
+    const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
+      select: ["id", "name", "slug"],
+      populate: { parent: { select: ["id"] } },
+      limit: 100000,
     });
 
-    if (!product) {
-      ctx.status = 404;
-      ctx.body = { error: "not_found" };
-      return;
-    }
+    breadcrumbsCategories = buildCategoryChain({
+      startId: categoryId,
+      all: allCategories,
+    });
+  }
 
-    const categoryId = product.category?.id ?? null;
+  const variants = (product.variants ?? []).map((v) => ({
+    id: v.id,
+    attributes: {
+      name: v.name ?? null,
+      moyskladId: v.moyskladId ?? null,
+      price: v.price ?? null,
+      priceOld: v.priceOld ?? null,
+      characteristics: (v as any).characteristics ?? null,
+    },
+  }));
 
-    let breadcrumbsCategories: BreadcrumbCategory[] = [];
+  const specifications = (product.specifications ?? []).map((spec) => ({
+    id: spec.id ?? null,
+    label: spec.label ?? null,
+    value: spec.value ?? null,
+    href: spec.href ?? null,
+  }));
 
-    if (categoryId) {
-      const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
-        select: ["id", "name", "slug"],
-        populate: { parent: { select: ["id"] } },
-        limit: 100000,
-      });
+  // Маппим состав комплекта
+  const bundleItems = ((product as any).bundleItems ?? []).map((item: any) => {
+    const cp = item.componentProduct ?? null;
 
-      breadcrumbsCategories = buildCategoryChain({
-        startId: categoryId,
-        all: allCategories,
-      });
-    }
+    // Берём первое фото компонента
+    const firstImage = Array.isArray(cp?.image) ? cp.image[0] : null;
+    const imagePath =
+      firstImage?.formats?.large?.url ??
+      firstImage?.formats?.medium?.url ??
+      firstImage?.formats?.small?.url ??
+      firstImage?.formats?.thumbnail?.url ??
+      firstImage?.url ??
+      null;
 
-    const variants = (product.variants ?? []).map((v) => ({
-      id: v.id,
-      attributes: {
-        name: v.name ?? null,
-        moyskladId: v.moyskladId ?? null,
-        price: v.price ?? null,
-        priceOld: v.priceOld ?? null,
-        characteristics: (v as any).characteristics ?? null,
-      },
-    }));
-
-    const specifications = (product.specifications ?? []).map((spec) => ({
-      id: spec.id ?? null,
-      label: spec.label ?? null,
-      value: spec.value ?? null,
-      href: spec.href ?? null,
-    }));
-
-    ctx.body = {
-      item: {
-        id: product.id,
-        attributes: {
-          name: product.name ?? null,
-          moyskladId: product.moyskladId ?? null,
-          slug: product.slug ?? null,
-          price: product.price ?? null,
-          priceOld: product.priceOld ?? null,
-          description: product.description ?? null,
-          image: Array.isArray((product as any).image) ? (product as any).image : [],
-          specifications,
-          // Новые поля — гравировка и артикул
-          engravingEnabled: product.engravingEnabled ?? false,
-          code: product.code ?? null,
-        },
-      },
-      variants,
-      breadcrumbsCategories,
+    return {
+      id: item.id,
+      quantity: item.quantity ?? 1,
+      componentProduct: cp
+        ? {
+            id: cp.id,
+            name: cp.name ?? null,
+            slug: cp.slug ?? null,
+            price: cp.price ?? null,
+            imageUrl: imagePath ?? null,
+          }
+        : null,
     };
-  },
+  });
+
+  ctx.body = {
+    item: {
+      id: product.id,
+      attributes: {
+        name: product.name ?? null,
+        moyskladId: product.moyskladId ?? null,
+        slug: product.slug ?? null,
+        price: product.price ?? null,
+        priceOld: product.priceOld ?? null,
+        description: product.description ?? null,
+        image: Array.isArray((product as any).image) ? (product as any).image : [],
+        specifications,
+        engravingEnabled: product.engravingEnabled ?? false,
+        code: product.code ?? null,
+      },
+    },
+    variants,
+    breadcrumbsCategories,
+    // Пустой массив для обычных товаров, заполненный для bundle
+    bundleItems,
+  };
+},
 
   /**
    * GET /api/catalog/search?q=шейкер
