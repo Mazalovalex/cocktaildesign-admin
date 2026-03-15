@@ -37,15 +37,31 @@ export default {
 
     async function sendTelegram(text: string): Promise<void> {
       if (!tgToken || !tgChatId) return;
-      try {
-        await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: tgChatId, text, parse_mode: "HTML" }),
-        });
-      } catch (err) {
-        strapi.log.warn(`[telegram] недоступен: ${String(err)}`);
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const res = await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: tgChatId, text, parse_mode: "HTML" }),
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (res.ok) {
+            if (attempt > 1) strapi.log.info(`[telegram] ✅ отправлено с попытки ${attempt}`);
+            return;
+          }
+
+          const body = await res.text().catch(() => "");
+          strapi.log.warn(`[telegram] попытка ${attempt}/3: HTTP ${res.status} ${body}`);
+        } catch (err) {
+          strapi.log.warn(`[telegram] попытка ${attempt}/3 неудачна: ${String(err)}`);
+        }
+
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 10000));
       }
+
+      strapi.log.error("[telegram] ❌ не удалось отправить после 3 попыток");
     }
 
     // ─────────────────────────────────────────────────────────
@@ -100,7 +116,7 @@ export default {
     strapi.log.info(`[monitor] ✅ Мониторинг запущен (каждые 5 мин, ${MONITORS.length} endpoint'ов)`);
 
     // ─────────────────────────────────────────────────────────
-    // Автосинк + отчёт (каждые 2 часа круглосуточно)
+    // Автосинк + отчёт
     // ─────────────────────────────────────────────────────────
 
     async function callSync(path: string): Promise<void> {
@@ -190,11 +206,10 @@ export default {
       await sendTelegram(report);
     }
 
-    // Каждые 2 часа круглосуточно
-    cron.schedule("0 0,2,4,6,8,10,12,14,16,18,20,22 * * *", runFullSync, {
-      timezone: "Europe/Moscow",
-    });
+    // ⚠️ ТЕСТ: каждые 5 минут
+    // Когда проверишь — вернуть на: "0 0,2,4,6,8,10,12,14,16,18,20,22 * * *"
+    cron.schedule("*/5 * * * *", runFullSync, { timezone: "Europe/Moscow" });
 
-    strapi.log.info("[moysklad-cron] ✅ Расписание зарегистрировано (каждые 2ч круглосуточно)");
+    strapi.log.info("[moysklad-cron] ✅ Расписание зарегистрировано (ТЕСТ: каждые 5 минут)");
   },
 };
