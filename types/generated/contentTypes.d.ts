@@ -778,6 +778,42 @@ export interface ApiMoyskladVariantMoyskladVariant
   };
 }
 
+export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
+  collectionName: 'promo_codes';
+  info: {
+    displayName: 'promo-code';
+    pluralName: 'promo-codes';
+    singularName: 'promo-code';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    code: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    discountType: Schema.Attribute.Enumeration<['percent', 'fixed']> &
+      Schema.Attribute.Required;
+    discountValue: Schema.Attribute.Decimal;
+    isActive: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::promo-code.promo-code'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    usageCount: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<0>;
+    usageLimit: Schema.Attribute.Integer;
+  };
+}
+
 export interface ApiWeeklyProductBlockWeeklyProductBlock
   extends Struct.SingleTypeSchema {
   collectionName: 'weekly_product_blocks';
@@ -1328,6 +1364,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
+      'api::promo-code.promo-code': ApiPromoCodePromoCode;
       'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;
       'plugin::content-releases.release': PluginContentReleasesRelease;
       'plugin::content-releases.release-action': PluginContentReleasesReleaseAction;

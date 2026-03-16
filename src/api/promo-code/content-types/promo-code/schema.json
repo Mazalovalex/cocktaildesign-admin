@@ -1,0 +1,42 @@
+{
+  "kind": "collectionType",
+  "collectionName": "promo_codes",
+  "info": {
+    "singularName": "promo-code",
+    "pluralName": "promo-codes",
+    "displayName": "promo-code"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "code": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    },
+    "discountType": {
+      "type": "enumeration",
+      "required": true,
+      "enum": [
+        "percent",
+        "fixed"
+      ]
+    },
+    "discountValue": {
+      "type": "decimal"
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": true
+    },
+    "usageLimit": {
+      "type": "integer"
+    },
+    "usageCount": {
+      "type": "integer",
+      "default": 0
+    }
+  }
+}
