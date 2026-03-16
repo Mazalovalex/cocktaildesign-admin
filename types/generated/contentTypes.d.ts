@@ -786,7 +786,7 @@ export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
     singularName: 'promo-code';
   };
   options: {
-    draftAndPublish: true;
+    draftAndPublish: false;
   };
   attributes: {
     code: Schema.Attribute.String &
