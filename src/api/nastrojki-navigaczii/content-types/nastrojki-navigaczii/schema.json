@@ -1,0 +1,26 @@
+{
+  "kind": "singleType",
+  "collectionName": "nastrojki_navigacziis",
+  "info": {
+    "singularName": "nastrojki-navigaczii",
+    "pluralName": "nastrojki-navigacziis",
+    "displayName": "Настройки навигации"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "headerCategories": {
+      "type": "component",
+      "component": "navigation.category-link",
+      "repeatable": true,
+      "required": false
+    },
+    "footerCategories": {
+      "type": "component",
+      "component": "navigation.category-link",
+      "repeatable": true
+    }
+  }
+}

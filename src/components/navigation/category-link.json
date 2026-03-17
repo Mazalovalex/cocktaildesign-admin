@@ -1,0 +1,22 @@
+{
+  "collectionName": "components_navigation_category_links",
+  "info": {
+    "displayName": "Category Link"
+  },
+  "options": {},
+  "attributes": {
+    "category": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::moysklad-category.moysklad-category"
+    },
+    "label": {
+      "type": "string"
+    },
+    "isVisible": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "config": {}
+}

@@ -778,6 +778,42 @@ export interface ApiMoyskladVariantMoyskladVariant
   };
 }
 
+export interface ApiNastrojkiNavigacziiNastrojkiNavigaczii
+  extends Struct.SingleTypeSchema {
+  collectionName: 'nastrojki_navigacziis';
+  info: {
+    displayName: '\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u043D\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u0438';
+    pluralName: 'nastrojki-navigacziis';
+    singularName: 'nastrojki-navigaczii';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    footerCategories: Schema.Attribute.Component<
+      'navigation.category-link',
+      true
+    >;
+    headerCategories: Schema.Attribute.Component<
+      'navigation.category-link',
+      true
+    >;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::nastrojki-navigaczii.nastrojki-navigaczii'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
   collectionName: 'promo_codes';
   info: {
@@ -1364,6 +1400,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
+      'api::nastrojki-navigaczii.nastrojki-navigaczii': ApiNastrojkiNavigacziiNastrojkiNavigaczii;
       'api::promo-code.promo-code': ApiPromoCodePromoCode;
       'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;
       'plugin::content-releases.release': PluginContentReleasesRelease;

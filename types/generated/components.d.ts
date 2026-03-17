@@ -62,6 +62,21 @@ export interface BlocksTextBlock extends Struct.ComponentSchema {
   };
 }
 
+export interface NavigationCategoryLink extends Struct.ComponentSchema {
+  collectionName: 'components_navigation_category_links';
+  info: {
+    displayName: 'Category Link';
+  };
+  attributes: {
+    category: Schema.Attribute.Relation<
+      'oneToOne',
+      'api::moysklad-category.moysklad-category'
+    >;
+    isVisible: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    label: Schema.Attribute.String;
+  };
+}
+
 export interface ProductHarakteristika extends Struct.ComponentSchema {
   collectionName: 'components_product_harakteristika';
   info: {
@@ -82,6 +97,7 @@ declare module '@strapi/strapi' {
       'blocks.link-block': BlocksLinkBlock;
       'blocks.list-block': BlocksListBlock;
       'blocks.text-block': BlocksTextBlock;
+      'navigation.category-link': NavigationCategoryLink;
       'product.harakteristika': ProductHarakteristika;
     }
   }
