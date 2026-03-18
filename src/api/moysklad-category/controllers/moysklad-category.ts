@@ -855,12 +855,37 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       }
     }
 
-    // Считаем сколько товаров в каждой категории (только прямые потомки)
-    const productCountByCategoryId = new Map<number, number>();
+    // Считаем прямые товары по категориям
+    const directCountByCategoryId = new Map<number, number>();
     for (const product of allRows) {
       const catId = (product as any).category?.id ?? null;
       if (!catId) continue;
-      productCountByCategoryId.set(catId, (productCountByCategoryId.get(catId) ?? 0) + 1);
+      directCountByCategoryId.set(catId, (directCountByCategoryId.get(catId) ?? 0) + 1);
+    }
+
+    // Суммируем count вверх по дереву — родитель получает сумму всех потомков
+    const productCountByCategoryId = new Map<number, number>(directCountByCategoryId);
+
+    for (const catId of resultCategoryIds) {
+      const cat = byId.get(catId);
+      if (!cat) continue;
+
+      // Идём вверх от листа к корню и добавляем count родителям
+      let currentId: number | null = cat.parent?.id ?? null;
+      const directCount = directCountByCategoryId.get(catId) ?? 0;
+
+      if (directCount === 0) continue;
+
+      const visited = new Set<number>();
+      while (currentId && currentId !== CATALOG_ROOT_PARENT_ID) {
+        if (visited.has(currentId)) break;
+        visited.add(currentId);
+
+        productCountByCategoryId.set(currentId, (productCountByCategoryId.get(currentId) ?? 0) + directCount);
+
+        const parentNode = byId.get(currentId);
+        currentId = parentNode?.parent?.id ?? null;
+      }
     }
 
     // Формируем плоский список в формате categories-flat
