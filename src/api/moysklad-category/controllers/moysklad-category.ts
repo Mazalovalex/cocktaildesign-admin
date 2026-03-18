@@ -715,7 +715,41 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     // Получаем все товары коллекции через общую функцию
-    const allRows = await getCollectionProducts(strapi, collectionSlug);
+    let allRows = await getCollectionProducts(strapi, collectionSlug);
+
+    // Если передан categorySlug — фильтруем товары только из этой категории
+    // и всех её потомков
+    const filterCategorySlug = String(ctx.query.categorySlug ?? "").trim();
+
+    if (filterCategorySlug) {
+      const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+      // Находим корневую категорию по slug
+      const rootCategory = await categoryQuery.findOne({
+        where: { slug: filterCategorySlug },
+        select: ["id"],
+      });
+
+      if (rootCategory) {
+        // Загружаем все категории чтобы найти всех потомков
+        const allCategories = await categoryQuery.findMany({
+          select: ["id"],
+          populate: { parent: { select: ["id"] } },
+          limit: 100000,
+        });
+
+        // Собираем id корневой категории + все дочерние
+        const allowedCategoryIds = new Set(
+          collectDescendantCategoryIds({ rootId: rootCategory.id, all: allCategories }),
+        );
+
+        // Оставляем только товары из нужных категорий
+        allRows = allRows.filter((p) => {
+          const catId = (p as any).category?.id ?? null;
+          return catId && allowedCategoryIds.has(catId);
+        });
+      }
+    }
 
     const total = allRows.length;
     const paginatedRows = allRows.slice(offset, offset + limit);
