@@ -15,6 +15,14 @@
       "type": "string",
       "required": true
     },
+    "image": {
+      "type": "media",
+      "multiple": true,
+      "allowedTypes": [
+        "images",
+        "videos"
+      ]
+    },
     "moyskladId": {
       "type": "string",
       "required": true,

@@ -754,6 +754,7 @@ export interface ApiMoyskladVariantMoyskladVariant
     href: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
+    image: Schema.Attribute.Media<'images' | 'videos', true>;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
       'oneToMany',
