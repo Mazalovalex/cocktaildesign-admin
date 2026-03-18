@@ -6,72 +6,64 @@ export default {
       method: "GET",
       path: "/catalog/categories-flat",
       handler: "moysklad-category.categoriesFlat",
-      config: {
-        auth: false,
-      },
+      config: { auth: false },
     },
-
-    // ----------------------------------------------------------------------------
-    // Товары категории (категория + все потомки), пагинация limit/offset.
-    // ----------------------------------------------------------------------------
-
     {
       method: "GET",
       path: "/catalog/products",
       handler: "moysklad-category.products",
-      config: {
-        auth: false,
-      },
+      config: { auth: false },
     },
-
     {
       method: "GET",
       path: "/catalog/products-discounted",
       handler: "moysklad-category.productsDiscounted",
-      config: {
-        auth: false,
-      },
+      config: { auth: false },
     },
-
-    // ----------------------------------------------------------------------------
-    // Получить товары по массиву Strapi id
-    // ----------------------------------------------------------------------------
     {
       method: "GET",
       path: "/catalog/products-by-ids",
       handler: "moysklad-category.productsByIds",
       config: { auth: false },
     },
-
-    // ----------------------------------------------------------------------------
-    // Детальная карточка товара по slug (ms-xxxxxxx)
-    // ----------------------------------------------------------------------------
     {
       method: "GET",
       path: "/catalog/product",
       handler: "moysklad-category.productBySlug",
       config: { auth: false },
     },
-
-    // ----------------------------------------------------------------------------
-    // Поиск товаров по названию
-    // GET /api/catalog/search?q=шейкер
-    // ----------------------------------------------------------------------------
     {
       method: "GET",
       path: "/catalog/search",
       handler: "moysklad-category.search",
       config: { auth: false },
     },
-
-    // ----------------------------------------------------------------------------
-    // Случайные товары для виджета в поиске
-    // GET /api/catalog/random-products?count=2
-    // ----------------------------------------------------------------------------
     {
       method: "GET",
       path: "/catalog/random-products",
       handler: "moysklad-category.randomProducts",
+      config: { auth: false },
+    },
+
+    // ----------------------------------------------------------------------------
+    // Коллекция: товары по slug коллекции
+    // GET /api/catalog/collection/:slug/products
+    // ----------------------------------------------------------------------------
+    {
+      method: "GET",
+      path: "/catalog/collection/:slug/products",
+      handler: "moysklad-category.collectionProducts",
+      config: { auth: false },
+    },
+
+    // ----------------------------------------------------------------------------
+    // Коллекция: дерево категорий из товаров коллекции
+    // GET /api/catalog/collection/:slug/categories-tree
+    // ----------------------------------------------------------------------------
+    {
+      method: "GET",
+      path: "/catalog/collection/:slug/categories-tree",
+      handler: "moysklad-category.collectionCategoriesTree",
       config: { auth: false },
     },
   ],

@@ -1,3 +1,4 @@
+// backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
 import syncServiceFactory from "../services/sync";
 
@@ -25,9 +26,6 @@ function toSafeOffset(value: unknown): number {
   return n;
 }
 
-// ----------------------------------------------------------------------------
-// parseIdsQuery
-// ----------------------------------------------------------------------------
 function parseIdsQuery(value: unknown, max = 100): number[] {
   if (typeof value !== "string") return [];
 
@@ -41,22 +39,16 @@ function parseIdsQuery(value: unknown, max = 100): number[] {
 
   for (const part of parts) {
     const n = Number(part);
-
     if (!Number.isFinite(n)) continue;
     if (seen.has(n)) continue;
-
     seen.add(n);
     result.push(n);
-
     if (result.length >= max) break;
   }
 
   return result;
 }
 
-// ----------------------------------------------------------------------------
-// collectDescendantCategoryIds
-// ----------------------------------------------------------------------------
 function collectDescendantCategoryIds(params: {
   rootId: number;
   all: Array<{ id: number; parent?: { id?: number | null } | null }>;
@@ -68,7 +60,6 @@ function collectDescendantCategoryIds(params: {
   for (const row of all) {
     const parentId = row.parent?.id ?? null;
     if (!parentId) continue;
-
     const list = childrenByParentId.get(parentId) ?? [];
     list.push(row.id);
     childrenByParentId.set(parentId, list);
@@ -80,11 +71,9 @@ function collectDescendantCategoryIds(params: {
 
   while (queue.length > 0) {
     const current = queue.shift() as number;
-
     if (visited.has(current)) continue;
     visited.add(current);
     result.push(current);
-
     const children = childrenByParentId.get(current) ?? [];
     for (const childId of children) queue.push(childId);
   }
@@ -92,13 +81,11 @@ function collectDescendantCategoryIds(params: {
   return result;
 }
 
-// ----------------------------------------------------------------------------
-// Breadcrumbs: собрать цепочку категорий от листа к корню (по parent)
-// ----------------------------------------------------------------------------
 type CategoryRowLite = {
   id: number;
   name?: string | null;
   slug?: string | null;
+  productsCount?: number | null;
   parent?: { id?: number | null } | null;
 };
 
@@ -108,8 +95,6 @@ type BreadcrumbCategory = {
   name: string;
 };
 
-// Технический корень витрины (у тебя на фронте такой же id).
-// Нужен только чтобы НЕ показывать его в хлебных крошках.
 const CATALOG_ROOT_PARENT_ID = 14;
 
 function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] }): BreadcrumbCategory[] {
@@ -120,7 +105,6 @@ function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] })
 
   const chain: BreadcrumbCategory[] = [];
   const visited = new Set<number>();
-
   let currentId: number | null = startId;
 
   while (currentId) {
@@ -133,13 +117,8 @@ function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] })
     if (node.id !== CATALOG_ROOT_PARENT_ID) {
       const slug = typeof node.slug === "string" ? node.slug.trim() : "";
       const name = typeof node.name === "string" ? node.name.trim() : "";
-
       if (slug && name) {
-        chain.push({
-          id: String(node.id),
-          slug,
-          name,
-        });
+        chain.push({ id: String(node.id), slug, name });
       }
     }
 
@@ -172,23 +151,113 @@ type ProductRow = {
   name?: string | null;
   moyskladId?: string | null;
   slug?: string | null;
-
   price?: number | null;
   priceOld?: number | null;
   description?: string | null;
-
-  // Артикул товара из МойСклад
   code?: string | null;
-
-  // Флаг гравировки — выставляется вручную в Strapi
   engravingEnabled?: boolean | null;
-
   image?: unknown;
   category?: { id?: number | null; name?: string | null } | null;
-
   specifications?: ProductSpecificationRow[] | null;
   variants?: VariantRow[] | null;
 };
+
+// ----------------------------------------------------------------------------
+// getCollectionProducts
+// Вспомогательная функция — берёт товары коллекции по её selectionMode.
+// Используется в двух handlers: collectionProducts и collectionCategoriesTree.
+// ----------------------------------------------------------------------------
+async function getCollectionProducts(strapi: any, collectionSlug: string): Promise<ProductRow[]> {
+  const collectionQuery = strapi.db.query("api::catalog-collection.catalog-collection");
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+  // Находим коллекцию по slug
+  const collection = await collectionQuery.findOne({
+    where: { slug: collectionSlug },
+    populate: {
+      products: { select: ["id"] },
+      sourceCategory: { select: ["id", "slug"] },
+    },
+  });
+
+  if (!collection) return [];
+
+  const selectionMode = collection.selectionMode ?? "manual";
+
+  // --- manual: товары выбраны вручную в админке ---
+  if (selectionMode === "manual") {
+    const productIds = (collection.products ?? []).map((p: any) => p.id);
+
+    if (productIds.length === 0) return [];
+
+    return productQuery.findMany({
+      where: { id: { $in: productIds } },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["id", "name", "slug"] },
+      },
+      limit: 100000,
+    });
+  }
+
+  // --- category: все товары из указанной категории ---
+  if (selectionMode === "category") {
+    const sourceCategorySlug = collection.sourceCategory?.slug ?? null;
+    if (!sourceCategorySlug) return [];
+
+    const rootCategory = await categoryQuery.findOne({
+      where: { slug: sourceCategorySlug },
+      select: ["id"],
+    });
+
+    if (!rootCategory) return [];
+
+    const allCategories = await categoryQuery.findMany({
+      select: ["id"],
+      populate: { parent: { select: ["id"] } },
+      limit: 100000,
+    });
+
+    const categoryIds = collectDescendantCategoryIds({
+      rootId: rootCategory.id,
+      all: allCategories,
+    });
+
+    return productQuery.findMany({
+      where: { category: { id: { $in: categoryIds } } },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["id", "name", "slug"] },
+      },
+      limit: 100000,
+    });
+  }
+
+  // --- discount: все товары со скидкой ---
+  if (selectionMode === "discount") {
+    const rows: ProductRow[] = await productQuery.findMany({
+      where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["id", "name", "slug"] },
+      },
+      limit: 100000,
+    });
+
+    // Фильтруем только реальные скидки (priceOld > price)
+    return rows.filter((p) => {
+      const price = typeof p.price === "number" ? p.price : 0;
+      const priceOld = typeof p.priceOld === "number" ? p.priceOld : 0;
+      return price > 0 && priceOld > price;
+    });
+  }
+
+  return [];
+}
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
   /**
@@ -228,9 +297,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows = await categoryQuery.findMany({
       select: ["id", "name", "slug", "productsCount"],
-      populate: {
-        parent: { select: ["id"] },
-      },
+      populate: { parent: { select: ["id"] } },
       limit: 100000,
     });
 
@@ -281,22 +348,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     });
 
     const total = await productQuery.count({
-      where: {
-        category: { id: { $in: categoryIds } },
-      },
+      where: { category: { id: { $in: categoryIds } } },
     });
 
     const rows: ProductRow[] = await productQuery.findMany({
-      where: {
-        category: { id: { $in: categoryIds } },
-      },
-      // engravingEnabled нужен здесь — карточки в гриде тоже показывают тоггл
+      where: { category: { id: { $in: categoryIds } } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
-      populate: {
-        image: {
-          select: ["url", "alternativeText", "formats"],
-        },
-      },
+      populate: { image: { select: ["url", "alternativeText", "formats"] } },
       orderBy: { id: "desc" },
       limit,
       offset,
@@ -313,7 +371,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           slug: p.slug ?? null,
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
-          // флаг гравировки для карточки в каталоге
           engravingEnabled: p.engravingEnabled ?? false,
           image: (p as any).image ?? null,
         },
@@ -335,16 +392,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
     const rows: ProductRow[] = await productQuery.findMany({
-      where: {
-        price: { $gt: 0 },
-        priceOld: { $gt: 0 },
-      },
+      where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
-      populate: {
-        image: {
-          select: ["url", "alternativeText", "formats"],
-        },
-      },
+      populate: { image: { select: ["url", "alternativeText", "formats"] } },
       orderBy: { id: "desc" },
       limit: 100000,
     });
@@ -352,7 +402,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const discountedRows = rows.filter((product) => {
       const price = typeof product.price === "number" ? product.price : 0;
       const priceOld = typeof product.priceOld === "number" ? product.priceOld : 0;
-
       return price > 0 && priceOld > price;
     });
 
@@ -379,6 +428,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       hasMore,
     };
   },
+
   /**
    * GET /api/catalog/products-by-ids
    */
@@ -393,24 +443,15 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
     const rows: ProductRow[] = await productQuery.findMany({
-      where: {
-        id: { $in: ids },
-      },
+      where: { id: { $in: ids } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
-      populate: {
-        image: {
-          select: ["url", "alternativeText", "formats"],
-        },
-      },
+      populate: { image: { select: ["url", "alternativeText", "formats"] } },
       limit: 100,
     });
 
     const order = new Map<number, number>();
     ids.forEach((id, index) => order.set(id, index));
-
-    rows.sort((a, b) => {
-      return (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0);
-    });
+    rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
     ctx.body = {
       items: rows.map((p) => ({
@@ -428,138 +469,127 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-/**
- * GET /api/catalog/product?slug=ms-xxxxxxx
- */
-async productBySlug(ctx) {
-  const slug = String(ctx.query.slug ?? "").trim();
+  /**
+   * GET /api/catalog/product?slug=ms-xxxxxxx
+   */
+  async productBySlug(ctx) {
+    const slug = String(ctx.query.slug ?? "").trim();
 
-  if (!slug) {
-    ctx.status = 400;
-    ctx.body = { error: "slug_required" };
-    return;
-  }
+    if (!slug) {
+      ctx.status = 400;
+      ctx.body = { error: "slug_required" };
+      return;
+    }
 
-  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
-  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-  const product: ProductRow | null = await productQuery.findOne({
-    where: { slug },
-    select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description", "engravingEnabled", "code"],
-    populate: {
-      image: { select: ["url", "alternativeText", "formats"] },
-      category: { select: ["id"] },
-      specifications: true,
-      variants: {
-        select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
-        orderBy: { id: "asc" },
-      },
-      // Состав комплекта — populate только если это bundle
-      bundleItems: {
-        populate: {
-          componentProduct: {
-            select: ["id", "name", "slug", "price"],
-            populate: {
-              image: { select: ["url", "alternativeText", "formats"] },
+    const product: ProductRow | null = await productQuery.findOne({
+      where: { slug },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description", "engravingEnabled", "code"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["id"] },
+        specifications: true,
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics"],
+          orderBy: { id: "asc" },
+        },
+        bundleItems: {
+          populate: {
+            componentProduct: {
+              select: ["id", "name", "slug", "price"],
+              populate: { image: { select: ["url", "alternativeText", "formats"] } },
             },
           },
         },
       },
-    },
-  });
-
-  if (!product) {
-    ctx.status = 404;
-    ctx.body = { error: "not_found" };
-    return;
-  }
-
-  const categoryId = product.category?.id ?? null;
-
-  let breadcrumbsCategories: BreadcrumbCategory[] = [];
-
-  if (categoryId) {
-    const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
-      select: ["id", "name", "slug"],
-      populate: { parent: { select: ["id"] } },
-      limit: 100000,
     });
 
-    breadcrumbsCategories = buildCategoryChain({
-      startId: categoryId,
-      all: allCategories,
-    });
-  }
+    if (!product) {
+      ctx.status = 404;
+      ctx.body = { error: "not_found" };
+      return;
+    }
 
-  const variants = (product.variants ?? []).map((v) => ({
-    id: v.id,
-    attributes: {
-      name: v.name ?? null,
-      moyskladId: v.moyskladId ?? null,
-      price: v.price ?? null,
-      priceOld: v.priceOld ?? null,
-      characteristics: (v as any).characteristics ?? null,
-    },
-  }));
+    const categoryId = product.category?.id ?? null;
+    let breadcrumbsCategories: BreadcrumbCategory[] = [];
 
-  const specifications = (product.specifications ?? []).map((spec) => ({
-    id: spec.id ?? null,
-    label: spec.label ?? null,
-    value: spec.value ?? null,
-    href: spec.href ?? null,
-  }));
+    if (categoryId) {
+      const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
+        select: ["id", "name", "slug"],
+        populate: { parent: { select: ["id"] } },
+        limit: 100000,
+      });
 
-  // Маппим состав комплекта
-  const bundleItems = ((product as any).bundleItems ?? []).map((item: any) => {
-    const cp = item.componentProduct ?? null;
+      breadcrumbsCategories = buildCategoryChain({ startId: categoryId, all: allCategories });
+    }
 
-    // Берём первое фото компонента
-    const firstImage = Array.isArray(cp?.image) ? cp.image[0] : null;
-    const imagePath =
-      firstImage?.formats?.large?.url ??
-      firstImage?.formats?.medium?.url ??
-      firstImage?.formats?.small?.url ??
-      firstImage?.formats?.thumbnail?.url ??
-      firstImage?.url ??
-      null;
-
-    return {
-      id: item.id,
-      quantity: item.quantity ?? 1,
-      componentProduct: cp
-        ? {
-            id: cp.id,
-            name: cp.name ?? null,
-            slug: cp.slug ?? null,
-            price: cp.price ?? null,
-            imageUrl: imagePath ?? null,
-          }
-        : null,
-    };
-  });
-
-  ctx.body = {
-    item: {
-      id: product.id,
+    const variants = (product.variants ?? []).map((v) => ({
+      id: v.id,
       attributes: {
-        name: product.name ?? null,
-        moyskladId: product.moyskladId ?? null,
-        slug: product.slug ?? null,
-        price: product.price ?? null,
-        priceOld: product.priceOld ?? null,
-        description: product.description ?? null,
-        image: Array.isArray((product as any).image) ? (product as any).image : [],
-        specifications,
-        engravingEnabled: product.engravingEnabled ?? false,
-        code: product.code ?? null,
+        name: v.name ?? null,
+        moyskladId: v.moyskladId ?? null,
+        price: v.price ?? null,
+        priceOld: v.priceOld ?? null,
+        characteristics: (v as any).characteristics ?? null,
       },
-    },
-    variants,
-    breadcrumbsCategories,
-    // Пустой массив для обычных товаров, заполненный для bundle
-    bundleItems,
-  };
-},
+    }));
+
+    const specifications = (product.specifications ?? []).map((spec) => ({
+      id: spec.id ?? null,
+      label: spec.label ?? null,
+      value: spec.value ?? null,
+      href: spec.href ?? null,
+    }));
+
+    const bundleItems = ((product as any).bundleItems ?? []).map((item: any) => {
+      const cp = item.componentProduct ?? null;
+      const firstImage = Array.isArray(cp?.image) ? cp.image[0] : null;
+      const imagePath =
+        firstImage?.formats?.large?.url ??
+        firstImage?.formats?.medium?.url ??
+        firstImage?.formats?.small?.url ??
+        firstImage?.formats?.thumbnail?.url ??
+        firstImage?.url ??
+        null;
+
+      return {
+        id: item.id,
+        quantity: item.quantity ?? 1,
+        componentProduct: cp
+          ? {
+              id: cp.id,
+              name: cp.name ?? null,
+              slug: cp.slug ?? null,
+              price: cp.price ?? null,
+              imageUrl: imagePath ?? null,
+            }
+          : null,
+      };
+    });
+
+    ctx.body = {
+      item: {
+        id: product.id,
+        attributes: {
+          name: product.name ?? null,
+          moyskladId: product.moyskladId ?? null,
+          slug: product.slug ?? null,
+          price: product.price ?? null,
+          priceOld: product.priceOld ?? null,
+          description: product.description ?? null,
+          image: Array.isArray((product as any).image) ? (product as any).image : [],
+          specifications,
+          engravingEnabled: product.engravingEnabled ?? false,
+          code: product.code ?? null,
+        },
+      },
+      variants,
+      breadcrumbsCategories,
+      bundleItems,
+    };
+  },
 
   /**
    * GET /api/catalog/search?q=шейкер
@@ -581,12 +611,8 @@ async productBySlug(ctx) {
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
       populate: {
-        image: {
-          select: ["url", "alternativeText", "formats"],
-        },
-        category: {
-          select: ["name"],
-        },
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["name"] },
       },
       orderBy: { id: "desc" },
       limit: 10,
@@ -617,9 +643,7 @@ async productBySlug(ctx) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
     const total = await productQuery.count({
-      where: {
-        category: { id: { $notIn: [14] } },
-      },
+      where: { category: { id: { $notIn: [14] } } },
     });
 
     if (total === 0) {
@@ -631,9 +655,7 @@ async productBySlug(ctx) {
     const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
 
     const rows: ProductRow[] = await productQuery.findMany({
-      where: {
-        category: { id: { $notIn: [14] } },
-      },
+      where: { category: { id: { $notIn: [14] } } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
@@ -657,5 +679,178 @@ async productBySlug(ctx) {
         },
       })),
     };
+  },
+
+  /**
+   * GET /api/catalog/collection/:slug/products
+   *
+   * Возвращает товары коллекции с пагинацией.
+   * Логика зависит от selectionMode коллекции:
+   * - manual: товары выбраны вручную в админке
+   * - category: все товары из указанной категории
+   * - discount: все товары со скидкой
+   */
+  async collectionProducts(ctx) {
+    const collectionSlug = String(ctx.params.slug ?? "").trim();
+    const limit = toSafeLimit(ctx.query.limit, 50);
+    const offset = toSafeOffset(ctx.query.offset);
+
+    if (!collectionSlug) {
+      ctx.status = 400;
+      ctx.body = { error: "slug_required" };
+      return;
+    }
+
+    // Проверяем что коллекция существует и получаем её мета-данные
+    const collectionQuery = strapi.db.query("api::catalog-collection.catalog-collection");
+    const collection = await collectionQuery.findOne({
+      where: { slug: collectionSlug },
+      select: ["id", "title", "slug", "description", "selectionMode"],
+    });
+
+    if (!collection) {
+      ctx.status = 404;
+      ctx.body = { error: "collection_not_found" };
+      return;
+    }
+
+    // Получаем все товары коллекции через общую функцию
+    const allRows = await getCollectionProducts(strapi, collectionSlug);
+
+    const total = allRows.length;
+    const paginatedRows = allRows.slice(offset, offset + limit);
+    const hasMore = offset + paginatedRows.length < total;
+
+    ctx.body = {
+      // Мета-данные коллекции для заголовка страницы
+      collection: {
+        id: String(collection.id),
+        title: collection.title ?? "",
+        slug: collection.slug ?? "",
+        description: collection.description ?? null,
+      },
+      items: paginatedRows.map((p) => ({
+        id: p.id,
+        attributes: {
+          name: p.name ?? null,
+          moyskladId: p.moyskladId ?? null,
+          slug: p.slug ?? null,
+          price: p.price ?? null,
+          priceOld: p.priceOld ?? null,
+          engravingEnabled: p.engravingEnabled ?? false,
+          image: (p as any).image ?? null,
+        },
+      })),
+      total,
+      limit,
+      offset,
+      hasMore,
+    };
+  },
+
+  /**
+   * GET /api/catalog/collection/:slug/categories-tree
+   *
+   * Возвращает плоский список категорий из товаров коллекции.
+   * Фронт передаёт его в buildCatalogTree → получает дерево для CatalogSidebar.
+   *
+   * Формат ответа совпадает с /api/catalog/categories-flat:
+   * [{ id, slug, name, productsCount, parentId }]
+   */
+  async collectionCategoriesTree(ctx) {
+    const collectionSlug = String(ctx.params.slug ?? "").trim();
+
+    if (!collectionSlug) {
+      ctx.status = 400;
+      ctx.body = { error: "slug_required" };
+      return;
+    }
+
+    // Получаем все товары коллекции
+    const allRows = await getCollectionProducts(strapi, collectionSlug);
+
+    if (allRows.length === 0) {
+      ctx.body = [];
+      return;
+    }
+
+    const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+    // Собираем уникальные id категорий из товаров
+    const categoryIdSet = new Set<number>();
+    for (const product of allRows) {
+      const catId = (product as any).category?.id ?? null;
+      if (catId) categoryIdSet.add(catId);
+    }
+
+    if (categoryIdSet.size === 0) {
+      ctx.body = [];
+      return;
+    }
+
+    // Загружаем полное дерево категорий (нужно для построения цепочек к корню)
+    const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
+      select: ["id", "name", "slug", "productsCount"],
+      populate: { parent: { select: ["id"] } },
+      limit: 100000,
+    });
+
+    const byId = new Map<number, CategoryRowLite>();
+    for (const cat of allCategories) byId.set(cat.id, cat);
+
+    // Для каждой категории товара строим цепочку до корня
+    // и добавляем все категории из цепочки в результирующий Set
+    const resultCategoryIds = new Set<number>();
+
+    for (const catId of categoryIdSet) {
+      // Идём вверх по дереву от листа к корню
+      let currentId: number | null = catId;
+      const visited = new Set<number>();
+
+      while (currentId) {
+        if (visited.has(currentId)) break;
+        visited.add(currentId);
+
+        // Не включаем технический корень
+        if (currentId !== CATALOG_ROOT_PARENT_ID) {
+          resultCategoryIds.add(currentId);
+        }
+
+        const node = byId.get(currentId);
+        currentId = node?.parent?.id ?? null;
+      }
+    }
+
+    // Считаем сколько товаров в каждой категории (только прямые потомки)
+    const productCountByCategoryId = new Map<number, number>();
+    for (const product of allRows) {
+      const catId = (product as any).category?.id ?? null;
+      if (!catId) continue;
+      productCountByCategoryId.set(catId, (productCountByCategoryId.get(catId) ?? 0) + 1);
+    }
+
+    // Формируем плоский список в формате categories-flat
+    const result = [];
+    for (const catId of resultCategoryIds) {
+      const cat = byId.get(catId);
+      if (!cat) continue;
+
+      const slug = typeof cat.slug === "string" ? cat.slug.trim() : "";
+      const name = typeof cat.name === "string" ? cat.name.trim() : "";
+      if (!slug || !name) continue;
+
+      const parentId = cat.parent?.id ?? null;
+
+      result.push({
+        id: String(catId),
+        slug,
+        name,
+        // productsCount — сколько товаров из коллекции в этой категории
+        productsCount: productCountByCategoryId.get(catId) ?? 0,
+        parentId: parentId && parentId !== CATALOG_ROOT_PARENT_ID ? String(parentId) : null,
+      });
+    }
+
+    ctx.body = result;
   },
 }));
