@@ -138,6 +138,7 @@ type VariantRow = {
   priceOld?: number | null;
   code?: string | null;
   characteristics?: unknown;
+  image?: unknown;
 };
 
 type ProductSpecificationRow = {
@@ -494,6 +495,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         specifications: true,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics", "code"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
           orderBy: { id: "asc" },
         },
         bundleItems: {
@@ -535,6 +539,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         priceOld: v.priceOld ?? null,
         code: v.code ?? null,
         characteristics: (v as any).characteristics ?? null,
+        image: v.image ?? null,
       },
     }));
 
