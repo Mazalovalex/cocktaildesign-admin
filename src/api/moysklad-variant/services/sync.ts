@@ -221,17 +221,13 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
     const payload = {
       name: v.name,
       moyskladId: v.id,
+      href: `https://api.moysklad.ru/api/remap/1.2/entity/variant/${v.id}`, // ← добавить
       code: v.code ?? null,
       updated: v.updated ?? null,
-
       product: product.id,
-
-      // Пока кладём как массив {name,value} — удобно и быстро.
       characteristics: v.characteristics ?? [],
-
       price: priceByName(v.salePrices, "Цена с сайта"),
       priceOld: priceByName(v.salePrices, "Цена продажи"),
-
       publishedAt: new Date().toISOString(),
     };
 
