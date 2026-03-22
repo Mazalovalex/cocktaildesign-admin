@@ -355,7 +355,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
       populate: { image: { select: ["url", "alternativeText", "formats"] } },
       orderBy: { id: "desc" },
       limit,
@@ -374,6 +374,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          code: p.code ?? null,
           image: (p as any).image ?? null,
         },
       })),
