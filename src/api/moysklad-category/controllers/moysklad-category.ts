@@ -195,7 +195,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
 
     return productQuery.findMany({
       where: { id: { $in: productIds } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -229,7 +229,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
 
     return productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -242,7 +242,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
   if (selectionMode === "discount") {
     const rows: ProductRow[] = await productQuery.findMany({
       where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -396,7 +396,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
       populate: { image: { select: ["url", "alternativeText", "formats"] } },
       orderBy: { id: "desc" },
       limit: 100000,
@@ -422,6 +422,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          code: p.code ?? null,
           image: (p as any).image ?? null,
         },
       })),
@@ -447,7 +448,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: { id: { $in: ids } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
       populate: { image: { select: ["url", "alternativeText", "formats"] } },
       limit: 100,
     });
@@ -466,6 +467,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          code: p.code ?? null,
           image: (p as any).image ?? null,
         },
       })),
@@ -780,6 +782,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          code: p.code ?? null,
           image: (p as any).image ?? null,
         },
       })),
