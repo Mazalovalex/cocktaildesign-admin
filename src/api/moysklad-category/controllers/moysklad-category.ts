@@ -356,7 +356,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const rows: ProductRow[] = await productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
-      populate: { image: { select: ["url", "alternativeText", "formats"] } },
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          orderBy: { id: "asc" },
+        },
+      },
       orderBy: { id: "desc" },
       limit,
       offset,
@@ -376,6 +382,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: p.engravingEnabled ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
+          variants: (p as any).variants ?? [],
         },
       })),
       total,
