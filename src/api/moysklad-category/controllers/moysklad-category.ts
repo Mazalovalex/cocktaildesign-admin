@@ -1,4 +1,3 @@
-// backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
 import syncServiceFactory from "../services/sync";
 
@@ -164,6 +163,21 @@ type ProductRow = {
   variants?: VariantRow[] | null;
 };
 
+function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
+  return (rawVariants ?? []).map((variant) => ({
+    id: variant.id,
+    attributes: {
+      name: variant.name ?? null,
+      moyskladId: variant.moyskladId ?? null,
+      price: variant.price ?? null,
+      priceOld: variant.priceOld ?? null,
+      code: variant.code ?? null,
+      characteristics: variant.characteristics ?? null,
+      image: (variant as any).image ?? null,
+    },
+  }));
+}
+
 // ----------------------------------------------------------------------------
 // getCollectionProducts
 // Вспомогательная функция — берёт товары коллекции по её selectionMode.
@@ -199,6 +213,13 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
       },
       limit: 100000,
     });
@@ -233,6 +254,13 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
       },
       limit: 100000,
     });
@@ -246,6 +274,13 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
       },
       limit: 100000,
     });
@@ -360,6 +395,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
           orderBy: { id: "asc" },
         },
       },
@@ -382,7 +420,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: p.engravingEnabled ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
-          variants: (p as any).variants ?? [],
+          variants: mapPreviewVariants((p as any).variants),
         },
       })),
       total,
@@ -404,7 +442,16 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const rows: ProductRow[] = await productQuery.findMany({
       where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
-      populate: { image: { select: ["url", "alternativeText", "formats"] } },
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
+      },
       orderBy: { id: "desc" },
       limit: 100000,
     });
@@ -431,6 +478,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: p.engravingEnabled ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
+          variants: mapPreviewVariants((p as any).variants),
         },
       })),
       total,
@@ -456,7 +504,16 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const rows: ProductRow[] = await productQuery.findMany({
       where: { id: { $in: ids } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
-      populate: { image: { select: ["url", "alternativeText", "formats"] } },
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
+      },
       limit: 100,
     });
 
@@ -476,6 +533,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: p.engravingEnabled ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
+          variants: mapPreviewVariants((p as any).variants),
         },
       })),
     };
@@ -791,6 +849,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: p.engravingEnabled ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
+          variants: mapPreviewVariants((p as any).variants),
         },
       })),
       total,
