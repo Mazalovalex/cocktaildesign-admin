@@ -116,6 +116,10 @@
       "relation": "oneToMany",
       "target": "api::moysklad-variant.moysklad-variant",
       "mappedBy": "product"
+    },
+    "discountExcluded": {
+      "type": "boolean",
+      "default": false
     }
   }
 }

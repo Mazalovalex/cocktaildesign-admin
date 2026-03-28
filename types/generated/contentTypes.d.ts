@@ -691,6 +691,8 @@ export interface ApiMoyskladProductMoyskladProduct
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
     description: Schema.Attribute.Text;
+    discountExcluded: Schema.Attribute.Boolean &
+      Schema.Attribute.DefaultTo<false>;
     displayTitle: Schema.Attribute.String;
     engravingEnabled: Schema.Attribute.Boolean &
       Schema.Attribute.DefaultTo<false>;
