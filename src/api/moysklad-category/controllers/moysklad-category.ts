@@ -561,7 +561,18 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const product: ProductRow | null = await productQuery.findOne({
       where: { slug },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "description", "engravingEnabled", "code"],
+      select: [
+        "id",
+        "name",
+        "moyskladId",
+        "slug",
+        "price",
+        "priceOld",
+        "description",
+        "engravingEnabled",
+        "code",
+        "discountExcluded",
+      ],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id"] },
@@ -662,6 +673,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           image: Array.isArray((product as any).image) ? (product as any).image : [],
           specifications,
           engravingEnabled: product.engravingEnabled ?? false,
+          discountExcluded: product.discountExcluded ?? false,
           code: product.code ?? null,
         },
       },
