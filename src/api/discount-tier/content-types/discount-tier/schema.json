@@ -1,0 +1,23 @@
+{
+  "kind": "collectionType",
+  "collectionName": "discount_tiers",
+  "info": {
+    "singularName": "discount-tier",
+    "pluralName": "discount-tiers",
+    "displayName": " Уровень скидки"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "minAmount": {
+      "type": "integer",
+      "required": true
+    },
+    "percent": {
+      "type": "integer",
+      "required": true
+    }
+  }
+}

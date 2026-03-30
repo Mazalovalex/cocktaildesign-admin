@@ -501,6 +501,36 @@ export interface ApiColorColor extends Struct.CollectionTypeSchema {
   };
 }
 
+export interface ApiDiscountTierDiscountTier
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'discount_tiers';
+  info: {
+    displayName: 'discount-tier';
+    pluralName: 'discount-tiers';
+    singularName: 'discount-tier';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::discount-tier.discount-tier'
+    > &
+      Schema.Attribute.Private;
+    minAmount: Schema.Attribute.Integer & Schema.Attribute.Required;
+    percent: Schema.Attribute.Integer & Schema.Attribute.Required;
+    publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiKnowledgeItemKnowledgeItem
   extends Struct.CollectionTypeSchema {
   collectionName: 'knowledge_items';
@@ -1398,6 +1428,7 @@ declare module '@strapi/strapi' {
       'admin::user': AdminUser;
       'api::catalog-collection.catalog-collection': ApiCatalogCollectionCatalogCollection;
       'api::color.color': ApiColorColor;
+      'api::discount-tier.discount-tier': ApiDiscountTierDiscountTier;
       'api::knowledge-item.knowledge-item': ApiKnowledgeItemKnowledgeItem;
       'api::moysklad-bundle-item.moysklad-bundle-item': ApiMoyskladBundleItemMoyskladBundleItem;
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
