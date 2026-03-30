@@ -157,6 +157,8 @@ type ProductRow = {
   description?: string | null;
   code?: string | null;
   engravingEnabled?: boolean | null;
+  // Флаг — товар не участвует в скидках и промокодах
+  discountExcluded?: boolean | null;
   image?: unknown;
   category?: { id?: number | null; name?: string | null } | null;
   specifications?: ProductSpecificationRow[] | null;
@@ -209,7 +211,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
 
     return productQuery.findMany({
       where: { id: { $in: productIds } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -250,7 +252,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
 
     return productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -270,7 +272,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
   if (selectionMode === "discount") {
     const rows: ProductRow[] = await productQuery.findMany({
       where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -390,7 +392,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
@@ -418,6 +420,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          discountExcluded: p.discountExcluded ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
           variants: mapPreviewVariants((p as any).variants),
@@ -441,7 +444,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
@@ -476,6 +479,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          discountExcluded: p.discountExcluded ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
           variants: mapPreviewVariants((p as any).variants),
@@ -503,7 +507,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: { id: { $in: ids } },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
@@ -531,6 +535,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          discountExcluded: p.discountExcluded ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
           variants: mapPreviewVariants((p as any).variants),
@@ -799,7 +804,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     if (filterCategorySlug) {
       const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-      // Находим корневую категорию по slug
       const rootCategory = await categoryQuery.findOne({
         where: { slug: filterCategorySlug },
         select: ["id"],
@@ -831,7 +835,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const hasMore = offset + paginatedRows.length < total;
 
     ctx.body = {
-      // Мета-данные коллекции для заголовка страницы
       collection: {
         id: String(collection.id),
         title: collection.title ?? "",
@@ -847,6 +850,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: p.price ?? null,
           priceOld: p.priceOld ?? null,
           engravingEnabled: p.engravingEnabled ?? false,
+          discountExcluded: p.discountExcluded ?? false,
           code: p.code ?? null,
           image: (p as any).image ?? null,
           variants: mapPreviewVariants((p as any).variants),
@@ -899,7 +903,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    // Загружаем полное дерево категорий (нужно для построения цепочек к корню)
     const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
       select: ["id", "name", "slug", "productsCount"],
       populate: { parent: { select: ["id"] } },
@@ -922,7 +925,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         if (visited.has(currentId)) break;
         visited.add(currentId);
 
-        // Не включаем технический корень
         if (currentId !== CATALOG_ROOT_PARENT_ID) {
           resultCategoryIds.add(currentId);
         }
@@ -947,7 +949,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       const cat = byId.get(catId);
       if (!cat) continue;
 
-      // Идём вверх от листа к корню и добавляем count родителям
       let currentId: number | null = cat.parent?.id ?? null;
       const directCount = directCountByCategoryId.get(catId) ?? 0;
 
