@@ -505,7 +505,7 @@ export interface ApiDiscountTierDiscountTier
   extends Struct.CollectionTypeSchema {
   collectionName: 'discount_tiers';
   info: {
-    displayName: 'discount-tier';
+    displayName: ' \u0423\u0440\u043E\u0432\u0435\u043D\u044C \u0441\u043A\u0438\u0434\u043A\u0438';
     pluralName: 'discount-tiers';
     singularName: 'discount-tier';
   };
@@ -880,6 +880,37 @@ export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
       Schema.Attribute.Private;
     usageCount: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<0>;
     usageLimit: Schema.Attribute.Integer;
+  };
+}
+
+export interface ApiSpecificationTypeSpecificationType
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'specification_types';
+  info: {
+    displayName: 'Specification Type';
+    pluralName: 'specification-types';
+    singularName: 'specification-type';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::specification-type.specification-type'
+    > &
+      Schema.Attribute.Private;
+    name: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
   };
 }
 
@@ -1436,6 +1467,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
       'api::nastrojki-navigaczii.nastrojki-navigaczii': ApiNastrojkiNavigacziiNastrojkiNavigaczii;
       'api::promo-code.promo-code': ApiPromoCodePromoCode;
+      'api::specification-type.specification-type': ApiSpecificationTypeSpecificationType;
       'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;
       'plugin::content-releases.release': PluginContentReleasesRelease;
       'plugin::content-releases.release-action': PluginContentReleasesReleaseAction;

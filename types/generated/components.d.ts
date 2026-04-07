@@ -85,6 +85,10 @@ export interface ProductHarakteristika extends Struct.ComponentSchema {
   attributes: {
     href: Schema.Attribute.String;
     label: Schema.Attribute.String & Schema.Attribute.Required;
+    specification: Schema.Attribute.Relation<
+      'oneToOne',
+      'api::specification-type.specification-type'
+    >;
     value: Schema.Attribute.String & Schema.Attribute.Required;
   };
 }

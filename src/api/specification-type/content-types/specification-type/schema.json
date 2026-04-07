@@ -1,0 +1,20 @@
+{
+  "kind": "collectionType",
+  "collectionName": "specification_types",
+  "info": {
+    "singularName": "specification-type",
+    "pluralName": "specification-types",
+    "displayName": "Specification Type"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "unique": true
+    }
+  }
+}
