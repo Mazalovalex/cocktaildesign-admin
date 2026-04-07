@@ -5,9 +5,10 @@
   },
   "options": {},
   "attributes": {
-    "label": {
-      "type": "string",
-      "required": true
+    "specification": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::specification-type.specification-type"
     },
     "value": {
       "type": "string",
@@ -15,11 +16,6 @@
     },
     "href": {
       "type": "string"
-    },
-    "specification": {
-      "type": "relation",
-      "relation": "oneToOne",
-      "target": "api::specification-type.specification-type"
     }
   },
   "config": {}
