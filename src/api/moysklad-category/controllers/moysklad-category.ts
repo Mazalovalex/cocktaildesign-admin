@@ -576,7 +576,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id"] },
-        specifications: true,
+        specifications: {
+          populate: {
+            specification: {
+              select: ["id", "name"],
+            },
+          },
+        },
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "characteristics", "code"],
           populate: {
@@ -627,11 +633,17 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       },
     }));
 
-    const specifications = (product.specifications ?? []).map((spec) => ({
+    const specifications = (product.specifications ?? []).map((spec: any) => ({
       id: spec.id ?? null,
       label: spec.label ?? null,
       value: spec.value ?? null,
       href: spec.href ?? null,
+      specification: spec.specification
+        ? {
+            id: spec.specification.id ?? null,
+            name: spec.specification.name ?? null,
+          }
+        : null,
     }));
 
     const bundleItems = ((product as any).bundleItems ?? []).map((item: any) => {
