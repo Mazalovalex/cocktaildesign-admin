@@ -14,8 +14,10 @@
       "type": "string",
       "required": true
     },
-    "href": {
-      "type": "string"
+    "kategorii": {
+      "type": "relation",
+      "relation": "oneToOne",
+      "target": "api::moysklad-category.moysklad-category"
     }
   },
   "config": {}

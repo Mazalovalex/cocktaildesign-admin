@@ -83,7 +83,10 @@ export interface ProductHarakteristika extends Struct.ComponentSchema {
     displayName: '\u0425\u0430\u0440\u0430\u043A\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043A\u0430';
   };
   attributes: {
-    href: Schema.Attribute.String;
+    kategorii: Schema.Attribute.Relation<
+      'oneToOne',
+      'api::moysklad-category.moysklad-category'
+    >;
     specification: Schema.Attribute.Relation<
       'oneToOne',
       'api::specification-type.specification-type'
