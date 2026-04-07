@@ -548,6 +548,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
    * GET /api/catalog/product?slug=ms-xxxxxxx
    */
   async productBySlug(ctx) {
+    console.log("PRODUCT BY SLUG CONTROLLER HIT");
+    console.log("PRODUCT BY SLUG QUERY:", ctx.query);
+
     const slug = String(ctx.query.slug ?? "").trim();
 
     if (!slug) {
