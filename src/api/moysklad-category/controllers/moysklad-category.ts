@@ -584,6 +584,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             specification: {
               select: ["id", "name"],
             },
+            kategorii: {
+              select: ["id", "slug", "name"],
+            },
           },
         },
         variants: {
@@ -636,18 +639,41 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       },
     }));
 
-    const specifications = (product.specifications ?? []).map((spec: any) => ({
-      id: spec.id ?? null,
-      label: spec.label ?? null,
-      value: spec.value ?? null,
-      href: spec.href ?? null,
-      specification: spec.specification
+    const specifications = (product.specifications ?? []).map((spec: any) => {
+      // --- значение ---
+      const value = typeof spec.value === "string" ? spec.value.trim() : null;
+
+      // --- label (старое поле, может быть null) ---
+      const label = typeof spec.label === "string" ? spec.label.trim() : null;
+
+      // --- название характеристики (Материал, Тип и т.д.) ---
+      const specification = spec.specification
         ? {
             id: spec.specification.id ?? null,
-            name: spec.specification.name ?? null,
+            name: typeof spec.specification.name === "string" ? spec.specification.name.trim() : null,
           }
-        : null,
-    }));
+        : null;
+
+      // --- ссылка из категории ---
+      let href: string | null = null;
+
+      if (spec.kategorii && typeof spec.kategorii.slug === "string" && spec.kategorii.slug.trim()) {
+        href = `/catalog/${spec.kategorii.slug.trim()}`;
+      }
+
+      // --- fallback: если категории нет, берем ручной href ---
+      if (!href && typeof spec.href === "string" && spec.href.trim()) {
+        href = spec.href.trim();
+      }
+
+      return {
+        id: spec.id ?? null,
+        label,
+        value,
+        href,
+        specification,
+      };
+    });
 
     const bundleItems = ((product as any).bundleItems ?? []).map((item: any) => {
       const cp = item.componentProduct ?? null;
