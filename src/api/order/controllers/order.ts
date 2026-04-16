@@ -78,7 +78,6 @@ export default {
         engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
         telegram ? `Telegram: ${telegram}` : null,
         inn ? `ИНН: ${inn}` : null,
-        // Скидки — только если есть
         volumeDiscount ? `Скидка за объём ${volumeDiscountPercent}%: −${volumeDiscount} ₽` : null,
         promoCode && promoDiscount ? `Промокод ${promoCode}: −${promoDiscount} ₽` : null,
         comment ? `Комментарий: ${comment}` : null,
@@ -90,6 +89,8 @@ export default {
         positions,
         description: descriptionParts.join(" | "),
         shipmentAddress: address,
+        // Передаём процент скидки за объём — проставится в каждую позицию
+        volumeDiscountPercent: volumeDiscountPercent,
       });
 
       ctx.body = { ok: true, orderId: order.id, orderName: order.name };

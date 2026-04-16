@@ -35,6 +35,8 @@ async function createCustomerOrder(params: {
   positions: { productHref: string; quantity: number; price: number; engraving: boolean }[];
   description: string;
   shipmentAddress: string;
+  // Скидка за объём в процентах — если есть, проставляем во все позиции
+  volumeDiscountPercent?: number;
 }): Promise<{ id: string; name: string }> {
   const body = {
     organization: {
@@ -86,7 +88,9 @@ async function createCustomerOrder(params: {
     positions: params.positions.map((p) => ({
       quantity: p.quantity,
       price: p.price * 100,
-      discount: 0,
+      // Скидка за объём — только для товаров без флага discountExcluded
+      // Если скидки нет — 0
+      discount: params.volumeDiscountPercent ?? 0,
       vat: 0,
       vatEnabled: false,
       assortment: {
