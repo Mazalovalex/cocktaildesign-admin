@@ -51,6 +51,13 @@ async function createCustomerOrder(params: {
         mediaType: "application/json",
       },
     },
+    salesChannel: {
+      meta: {
+        href: process.env.MOYSKLAD_SALES_CHANNEL_HREF,
+        type: "saleschannel",
+        mediaType: "application/json",
+      },
+    },
     description: params.description,
     shipmentAddress: params.shipmentAddress,
     positions: params.positions.map((p) => ({
