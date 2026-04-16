@@ -75,7 +75,9 @@ async function createCustomerOrder(params: {
     body: JSON.stringify(body),
   });
 
-  return (await res.json()) as { id: string; name: string };
+  const result = (await res.json()) as { id: string; name: string };
+  strapi.log.info("[order] МойСклад ответ: " + JSON.stringify(result));
+  return result;
 }
 
 export default { findProductHref, createCounterparty, createCustomerOrder };
