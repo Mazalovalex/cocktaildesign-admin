@@ -32,7 +32,7 @@ async function createCounterparty(name: string, phone: string): Promise<string> 
 
 async function createCustomerOrder(params: {
   agentHref: string;
-  positions: { productHref: string; quantity: number; price: number }[];
+  positions: { productHref: string; quantity: number; price: number; engraving: boolean }[];
   description: string;
   shipmentAddress: string;
 }): Promise<{ id: string; name: string }> {
@@ -58,9 +58,15 @@ async function createCustomerOrder(params: {
         mediaType: "application/json",
       },
     },
+    store: {
+      meta: {
+        href: process.env.MOYSKLAD_STORE_HREF,
+        type: "store",
+        mediaType: "application/json",
+      },
+    },
     description: params.description,
     shipmentAddress: params.shipmentAddress,
-    // Обязательное доп. поле "Источник Заказа"
     attributes: [
       {
         meta: {

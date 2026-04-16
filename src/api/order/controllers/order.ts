@@ -12,7 +12,7 @@ export default {
       inn?: string;
       address: string;
       comment?: string;
-      items: { code: string; name: string; quantity: number; price: number }[];
+      items: { code: string; name: string; quantity: number; price: number; engraving: boolean }[];
     };
 
     const name = buyerType === "individual" ? fullName : contactName;
@@ -28,7 +28,7 @@ export default {
       const agentHref = await orderService.createCounterparty(name, phone);
 
       // 2. Ищем товары по артикулу
-      const positions: { productHref: string; quantity: number; price: number }[] = [];
+      const positions: { productHref: string; quantity: number; price: number; engraving: boolean }[] = [];
 
       for (const item of items) {
         const productHref = await orderService.findProductHref(item.code);
@@ -38,7 +38,12 @@ export default {
           continue;
         }
 
-        positions.push({ productHref, quantity: item.quantity, price: item.price });
+        positions.push({
+          productHref,
+          quantity: item.quantity,
+          price: item.price,
+          engraving: item.engraving,
+        });
       }
 
       if (positions.length === 0) {
@@ -48,8 +53,11 @@ export default {
       }
 
       // 3. Комментарий к заказу
+      const engravingItems = items.filter((i) => i.engraving).map((i) => i.name);
+
       const descriptionParts = [
         buyerType === "legal" ? "Юрлицо" : "Физлицо",
+        engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
         telegram ? `Telegram: ${telegram}` : null,
         inn ? `ИНН: ${inn}` : null,
         comment ? `Комментарий: ${comment}` : null,
