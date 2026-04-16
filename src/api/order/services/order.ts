@@ -36,6 +36,10 @@ async function createCustomerOrder(params: {
   description: string;
   shipmentAddress: string;
 }): Promise<{ id: string; name: string }> {
+  // Временный лог для отладки переменных окружения
+  strapi.log.info("[order] SALES_CHANNEL_HREF = " + process.env.MOYSKLAD_SALES_CHANNEL_HREF);
+  strapi.log.info("[order] ORG_HREF = " + process.env.MOYSKLAD_ORGANIZATION_HREF);
+
   const body = {
     organization: {
       meta: {
