@@ -3,7 +3,21 @@ import orderService from "../services/order";
 
 export default {
   async create(ctx: Context) {
-    const { buyerType, fullName, contactName, phone, telegram, inn, address, comment, items } = ctx.request.body as {
+    const {
+      buyerType,
+      fullName,
+      contactName,
+      phone,
+      telegram,
+      inn,
+      address,
+      comment,
+      items,
+      promoCode,
+      promoDiscount,
+      volumeDiscount,
+      volumeDiscountPercent,
+    } = ctx.request.body as {
       buyerType: "individual" | "legal";
       fullName?: string;
       contactName?: string;
@@ -13,6 +27,10 @@ export default {
       address: string;
       comment?: string;
       items: { code: string; name: string; quantity: number; price: number; engraving: boolean }[];
+      promoCode?: string;
+      promoDiscount?: number;
+      volumeDiscount?: number;
+      volumeDiscountPercent?: number;
     };
 
     const name = buyerType === "individual" ? fullName : contactName;
@@ -52,7 +70,7 @@ export default {
         return;
       }
 
-      // 3. Комментарий к заказу
+      // 3. Формируем комментарий к заказу
       const engravingItems = items.filter((i) => i.engraving).map((i) => i.name);
 
       const descriptionParts = [
@@ -60,6 +78,9 @@ export default {
         engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
         telegram ? `Telegram: ${telegram}` : null,
         inn ? `ИНН: ${inn}` : null,
+        // Скидки — только если есть
+        volumeDiscount ? `Скидка за объём ${volumeDiscountPercent}%: −${volumeDiscount} ₽` : null,
+        promoCode && promoDiscount ? `Промокод ${promoCode}: −${promoDiscount} ₽` : null,
         comment ? `Комментарий: ${comment}` : null,
       ].filter(Boolean);
 
