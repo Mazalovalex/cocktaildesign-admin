@@ -358,7 +358,50 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       limit: 100000,
     });
 
-    return rows.filter(productHasAnyDiscount);
+    const discountedRows = rows.filter(productHasAnyDiscount);
+
+    console.log(
+      "DISCOUNT DEBUG:",
+      discountedRows.map((product) => ({
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        price: product.price,
+        priceOld: product.priceOld,
+        discountExcluded: product.discountExcluded,
+
+        hasOwnDiscount: hasRealDiscount(product.price, product.priceOld),
+        hasVariantDiscount: variantsHaveDiscount(product.variants),
+        hasBundleDiscount: bundleItemsHaveDiscount(product.bundleItems),
+
+        variants: (product.variants ?? []).map((v) => ({
+          id: v.id,
+          name: v.name,
+          price: v.price,
+          priceOld: v.priceOld,
+        })),
+
+        bundleItems: (product.bundleItems ?? []).map((item) => ({
+          id: item.id,
+          componentProduct: item.componentProduct
+            ? {
+                id: item.componentProduct.id,
+                name: item.componentProduct.name,
+                price: item.componentProduct.price,
+                priceOld: item.componentProduct.priceOld,
+                variants: (item.componentProduct.variants ?? []).map((v) => ({
+                  id: v.id,
+                  name: v.name,
+                  price: v.price,
+                  priceOld: v.priceOld,
+                })),
+              }
+            : null,
+        })),
+      })),
+    );
+
+    return discountedRows;
   }
 
   return [];
