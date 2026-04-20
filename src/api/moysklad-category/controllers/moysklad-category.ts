@@ -25,14 +25,6 @@ function toSafeOffset(value: unknown): number {
   return n;
 }
 
-function toSafeBooleanFlag(value: unknown): boolean {
-  if (typeof value === "boolean") return value;
-  if (typeof value !== "string") return false;
-
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
 function parseIdsQuery(value: unknown, max = 100): number[] {
   if (typeof value !== "string") return [];
 
@@ -155,21 +147,6 @@ type ProductSpecificationRow = {
   href?: string | null;
 };
 
-type BundleComponentProductRow = {
-  id: number;
-  name?: string | null;
-  slug?: string | null;
-  price?: number | null;
-  priceOld?: number | null;
-  variants?: VariantRow[] | null;
-};
-
-type BundleItemRow = {
-  id: number;
-  quantity?: number | null;
-  componentProduct?: BundleComponentProductRow | null;
-};
-
 type ProductRow = {
   id: number;
   name?: string | null;
@@ -180,152 +157,13 @@ type ProductRow = {
   description?: string | null;
   code?: string | null;
   engravingEnabled?: boolean | null;
+  // Флаг — товар не участвует в скидках и промокодах
   discountExcluded?: boolean | null;
   image?: unknown;
-  category?: { id?: number | null; name?: string | null; slug?: string | null } | null;
+  category?: { id?: number | null; name?: string | null } | null;
   specifications?: ProductSpecificationRow[] | null;
   variants?: VariantRow[] | null;
-  bundleItems?: BundleItemRow[] | null;
 };
-
-type DiscountDebugItem = {
-  id: number;
-  name: string | null;
-  slug: string | null;
-  price: number | null;
-  priceOld: number | null;
-  discountExcluded: boolean;
-  hasOwnDiscount: boolean;
-  hasVariantDiscount: boolean;
-  hasBundleDiscount: boolean;
-  category: {
-    id: number | null;
-    name: string | null;
-    slug: string | null;
-  } | null;
-  variants: Array<{
-    id: number;
-    name: string | null;
-    price: number | null;
-    priceOld: number | null;
-    hasDiscount: boolean;
-  }>;
-  bundleItems: Array<{
-    id: number;
-    componentProduct: {
-      id: number;
-      name: string | null;
-      slug: string | null;
-      price: number | null;
-      priceOld: number | null;
-      hasOwnDiscount: boolean;
-      variants: Array<{
-        id: number;
-        name: string | null;
-        price: number | null;
-        priceOld: number | null;
-        hasDiscount: boolean;
-      }>;
-    } | null;
-  }>;
-};
-
-function hasRealDiscount(price?: number | null, priceOld?: number | null): boolean {
-  if (typeof price !== "number") return false;
-  if (typeof priceOld !== "number") return false;
-  if (!Number.isFinite(price) || !Number.isFinite(priceOld)) return false;
-
-  return price > 0 && priceOld > price;
-}
-
-function variantsHaveDiscount(variants?: VariantRow[] | null): boolean {
-  return (variants ?? []).some((variant) => hasRealDiscount(variant.price, variant.priceOld));
-}
-
-function bundleItemsHaveDiscount(bundleItems?: BundleItemRow[] | null): boolean {
-  return (bundleItems ?? []).some((item) => {
-    const componentProduct = item.componentProduct;
-    if (!componentProduct) return false;
-
-    if (hasRealDiscount(componentProduct.price, componentProduct.priceOld)) {
-      return true;
-    }
-
-    return variantsHaveDiscount(componentProduct.variants);
-  });
-}
-
-function productHasAnyDiscount(product: ProductRow, respectDiscountExcluded = false): boolean {
-  if (respectDiscountExcluded && product.discountExcluded === true) {
-    return false;
-  }
-
-  if (hasRealDiscount(product.price, product.priceOld)) {
-    return true;
-  }
-
-  if (variantsHaveDiscount(product.variants)) {
-    return true;
-  }
-
-  if (bundleItemsHaveDiscount(product.bundleItems)) {
-    return true;
-  }
-
-  return false;
-}
-
-function buildDiscountDebugItem(product: ProductRow): DiscountDebugItem {
-  return {
-    id: product.id,
-    name: product.name ?? null,
-    slug: product.slug ?? null,
-    price: typeof product.price === "number" ? product.price : null,
-    priceOld: typeof product.priceOld === "number" ? product.priceOld : null,
-    discountExcluded: product.discountExcluded === true,
-    hasOwnDiscount: hasRealDiscount(product.price, product.priceOld),
-    hasVariantDiscount: variantsHaveDiscount(product.variants),
-    hasBundleDiscount: bundleItemsHaveDiscount(product.bundleItems),
-    category: product.category
-      ? {
-          id: product.category.id ?? null,
-          name: product.category.name ?? null,
-          slug: product.category.slug ?? null,
-        }
-      : null,
-    variants: (product.variants ?? []).map((variant) => ({
-      id: variant.id,
-      name: variant.name ?? null,
-      price: typeof variant.price === "number" ? variant.price : null,
-      priceOld: typeof variant.priceOld === "number" ? variant.priceOld : null,
-      hasDiscount: hasRealDiscount(variant.price, variant.priceOld),
-    })),
-    bundleItems: (product.bundleItems ?? []).map((item) => {
-      const componentProduct = item.componentProduct ?? null;
-
-      return {
-        id: item.id,
-        componentProduct: componentProduct
-          ? {
-              id: componentProduct.id,
-              name: componentProduct.name ?? null,
-              slug: componentProduct.slug ?? null,
-              price: typeof componentProduct.price === "number" ? componentProduct.price : null,
-              priceOld: typeof componentProduct.priceOld === "number" ? componentProduct.priceOld : null,
-              hasOwnDiscount: hasRealDiscount(componentProduct.price, componentProduct.priceOld),
-              variants: (componentProduct.variants ?? []).map((variant) => ({
-                id: variant.id,
-                name: variant.name ?? null,
-                price: typeof variant.price === "number" ? variant.price : null,
-                priceOld: typeof variant.priceOld === "number" ? variant.priceOld : null,
-                hasDiscount: hasRealDiscount(variant.price, variant.priceOld),
-              })),
-            }
-          : null,
-      };
-    }),
-  };
-}
 
 function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
   return (rawVariants ?? []).map((variant) => ({
@@ -342,66 +180,36 @@ function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
   }));
 }
 
-async function getCollectionProducts(
-  strapi: any,
-  collectionSlug: string,
-  options?: {
-    debug?: boolean;
-    respectDiscountExcluded?: boolean;
-  },
-): Promise<{
-  items: ProductRow[];
-  debug?: {
-    selectionMode: string;
-    sourceRowsCount: number;
-    discountedRowsCount: number;
-    respectDiscountExcluded: boolean;
-    discountedItems: DiscountDebugItem[];
-  };
-}> {
-  const debug = options?.debug ?? false;
-  const respectDiscountExcluded = options?.respectDiscountExcluded ?? false;
-
+// ----------------------------------------------------------------------------
+// getCollectionProducts
+// Вспомогательная функция — берёт товары коллекции по её selectionMode.
+// Используется в двух handlers: collectionProducts и collectionCategoriesTree.
+// ----------------------------------------------------------------------------
+async function getCollectionProducts(strapi: any, collectionSlug: string): Promise<ProductRow[]> {
   const collectionQuery = strapi.db.query("api::catalog-collection.catalog-collection");
   const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
   const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
+  // Находим коллекцию по slug
   const collection = await collectionQuery.findOne({
     where: { slug: collectionSlug },
-    select: ["id", "slug", "selectionMode"],
     populate: {
       products: { select: ["id"] },
       sourceCategory: { select: ["id", "slug"] },
     },
   });
 
-  if (!collection) {
-    return { items: [] };
-  }
+  if (!collection) return [];
 
   const selectionMode = collection.selectionMode ?? "manual";
 
+  // --- manual: товары выбраны вручную в админке ---
   if (selectionMode === "manual") {
     const productIds = (collection.products ?? []).map((p: any) => p.id);
 
-    if (productIds.length === 0) {
-      return {
-        items: [],
-        ...(debug
-          ? {
-              debug: {
-                selectionMode,
-                sourceRowsCount: 0,
-                discountedRowsCount: 0,
-                respectDiscountExcluded,
-                discountedItems: [],
-              },
-            }
-          : {}),
-      };
-    }
+    if (productIds.length === 0) return [];
 
-    const rows: ProductRow[] = await productQuery.findMany({
+    return productQuery.findMany({
       where: { id: { $in: productIds } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -414,79 +222,22 @@ async function getCollectionProducts(
           },
           orderBy: { id: "asc" },
         },
-        bundleItems: {
-          populate: {
-            componentProduct: {
-              select: ["id", "name", "slug", "price", "priceOld"],
-              populate: {
-                variants: {
-                  select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
-                  orderBy: { id: "asc" },
-                },
-              },
-            },
-          },
-        },
       },
       limit: 100000,
     });
-
-    return {
-      items: rows,
-      ...(debug
-        ? {
-            debug: {
-              selectionMode,
-              sourceRowsCount: rows.length,
-              discountedRowsCount: rows.length,
-              respectDiscountExcluded,
-              discountedItems: rows.map(buildDiscountDebugItem),
-            },
-          }
-        : {}),
-    };
   }
 
+  // --- category: все товары из указанной категории ---
   if (selectionMode === "category") {
     const sourceCategorySlug = collection.sourceCategory?.slug ?? null;
-    if (!sourceCategorySlug) {
-      return {
-        items: [],
-        ...(debug
-          ? {
-              debug: {
-                selectionMode,
-                sourceRowsCount: 0,
-                discountedRowsCount: 0,
-                respectDiscountExcluded,
-                discountedItems: [],
-              },
-            }
-          : {}),
-      };
-    }
+    if (!sourceCategorySlug) return [];
 
     const rootCategory = await categoryQuery.findOne({
       where: { slug: sourceCategorySlug },
       select: ["id"],
     });
 
-    if (!rootCategory) {
-      return {
-        items: [],
-        ...(debug
-          ? {
-              debug: {
-                selectionMode,
-                sourceRowsCount: 0,
-                discountedRowsCount: 0,
-                respectDiscountExcluded,
-                discountedItems: [],
-              },
-            }
-          : {}),
-      };
-    }
+    if (!rootCategory) return [];
 
     const allCategories = await categoryQuery.findMany({
       select: ["id"],
@@ -499,7 +250,7 @@ async function getCollectionProducts(
       all: allCategories,
     });
 
-    const rows: ProductRow[] = await productQuery.findMany({
+    return productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -512,41 +263,15 @@ async function getCollectionProducts(
           },
           orderBy: { id: "asc" },
         },
-        bundleItems: {
-          populate: {
-            componentProduct: {
-              select: ["id", "name", "slug", "price", "priceOld"],
-              populate: {
-                variants: {
-                  select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
-                  orderBy: { id: "asc" },
-                },
-              },
-            },
-          },
-        },
       },
       limit: 100000,
     });
-
-    return {
-      items: rows,
-      ...(debug
-        ? {
-            debug: {
-              selectionMode,
-              sourceRowsCount: rows.length,
-              discountedRowsCount: rows.length,
-              respectDiscountExcluded,
-              discountedItems: rows.map(buildDiscountDebugItem),
-            },
-          }
-        : {}),
-    };
   }
 
+  // --- discount: все товары со скидкой ---
   if (selectionMode === "discount") {
     const rows: ProductRow[] = await productQuery.findMany({
+      where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
@@ -558,58 +283,25 @@ async function getCollectionProducts(
           },
           orderBy: { id: "asc" },
         },
-        bundleItems: {
-          populate: {
-            componentProduct: {
-              select: ["id", "name", "slug", "price", "priceOld"],
-              populate: {
-                variants: {
-                  select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
-                  orderBy: { id: "asc" },
-                },
-              },
-            },
-          },
-        },
       },
       limit: 100000,
     });
 
-    const discountedRows = rows.filter((product) => productHasAnyDiscount(product, respectDiscountExcluded));
-
-    return {
-      items: discountedRows,
-      ...(debug
-        ? {
-            debug: {
-              selectionMode,
-              sourceRowsCount: rows.length,
-              discountedRowsCount: discountedRows.length,
-              respectDiscountExcluded,
-              discountedItems: discountedRows.map(buildDiscountDebugItem),
-            },
-          }
-        : {}),
-    };
+    // Фильтруем только реальные скидки (priceOld > price)
+    return rows.filter((p) => {
+      const price = typeof p.price === "number" ? p.price : 0;
+      const priceOld = typeof p.priceOld === "number" ? p.priceOld : 0;
+      return price > 0 && priceOld > price;
+    });
   }
 
-  return {
-    items: [],
-    ...(debug
-      ? {
-          debug: {
-            selectionMode,
-            sourceRowsCount: 0,
-            discountedRowsCount: 0,
-            respectDiscountExcluded,
-            discountedItems: [],
-          },
-        }
-      : {}),
-  };
+  return [];
 }
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
+  /**
+   * POST /api/moysklad/sync/categories
+   */
   async syncAll(ctx) {
     const secret = ctx.request.headers["x-webhook-secret"];
 
@@ -636,6 +328,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
   },
 
+  /**
+   * GET /api/catalog/categories-flat
+   */
   async categoriesFlat(ctx) {
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
@@ -654,6 +349,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }));
   },
 
+  /**
+   * GET /api/catalog/products
+   */
   async products(ctx) {
     const categorySlug = String(ctx.query.categorySlug ?? "").trim();
     const limit = toSafeLimit(ctx.query.limit, 50);
@@ -735,19 +433,40 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
+  /**
+   * GET /api/catalog/products-discounted
+   */
   async productsDiscounted(ctx) {
     const limit = toSafeLimit(ctx.query.limit, 50);
     const offset = toSafeOffset(ctx.query.offset);
-    const debug = toSafeBooleanFlag(ctx.query.debug);
-    const respectDiscountExcluded = toSafeBooleanFlag(ctx.query.respectDiscountExcluded);
 
-    const result = await getCollectionProducts(strapi, "sale", {
-      debug,
-      respectDiscountExcluded,
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    const rows: ProductRow[] = await productQuery.findMany({
+      where: { price: { $gt: 0 }, priceOld: { $gt: 0 } },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
+      },
+      orderBy: { id: "desc" },
+      limit: 100000,
     });
 
-    const total = result.items.length;
-    const paginatedRows = result.items.slice(offset, offset + limit);
+    const discountedRows = rows.filter((product) => {
+      const price = typeof product.price === "number" ? product.price : 0;
+      const priceOld = typeof product.priceOld === "number" ? product.priceOld : 0;
+      return price > 0 && priceOld > price;
+    });
+
+    const total = discountedRows.length;
+    const paginatedRows = discountedRows.slice(offset, offset + limit);
     const hasMore = offset + paginatedRows.length < total;
 
     ctx.body = {
@@ -770,10 +489,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit,
       offset,
       hasMore,
-      ...(debug ? { debug: result.debug ?? null } : {}),
     };
   },
 
+  /**
+   * GET /api/catalog/products-by-ids
+   */
   async productsByIds(ctx) {
     const ids = parseIdsQuery(ctx.query.ids);
 
@@ -823,6 +544,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
+  /**
+   * GET /api/catalog/product?slug=ms-xxxxxxx
+   */
   async productBySlug(ctx) {
     console.log("PRODUCT BY SLUG CONTROLLER HIT");
     console.log("PRODUCT BY SLUG QUERY:", ctx.query);
@@ -916,9 +640,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }));
 
     const specifications = (product.specifications ?? []).map((spec: any) => {
+      // --- значение ---
       const value = typeof spec.value === "string" ? spec.value.trim() : null;
+
+      // --- label (старое поле, может быть null) ---
       const label = typeof spec.label === "string" ? spec.label.trim() : null;
 
+      // --- название характеристики (Материал, Тип и т.д.) ---
       const specification = spec.specification
         ? {
             id: spec.specification.id ?? null,
@@ -926,12 +654,14 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           }
         : null;
 
+      // --- ссылка из категории ---
       let href: string | null = null;
 
       if (spec.kategorii && typeof spec.kategorii.slug === "string" && spec.kategorii.slug.trim()) {
         href = `/catalog/${spec.kategorii.slug.trim()}`;
       }
 
+      // --- fallback: если категории нет, берем ручной href ---
       if (!href && typeof spec.href === "string" && spec.href.trim()) {
         href = spec.href.trim();
       }
@@ -994,6 +724,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
+  /**
+   * GET /api/catalog/search?q=шейкер
+   */
   async search(ctx) {
     const q = String(ctx.query.q ?? "").trim();
 
@@ -1034,6 +767,9 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
+  /**
+   * GET /api/catalog/random-products?count=2
+   */
   async randomProducts(ctx) {
     const count = Math.min(Math.max(Number(ctx.query.count ?? 2), 1), 6);
 
@@ -1078,12 +814,19 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
+  /**
+   * GET /api/catalog/collection/:slug/products
+   *
+   * Возвращает товары коллекции с пагинацией.
+   * Логика зависит от selectionMode коллекции:
+   * - manual: товары выбраны вручную в админке
+   * - category: все товары из указанной категории
+   * - discount: все товары со скидкой
+   */
   async collectionProducts(ctx) {
     const collectionSlug = String(ctx.params.slug ?? "").trim();
     const limit = toSafeLimit(ctx.query.limit, 50);
     const offset = toSafeOffset(ctx.query.offset);
-    const debug = toSafeBooleanFlag(ctx.query.debug);
-    const respectDiscountExcluded = toSafeBooleanFlag(ctx.query.respectDiscountExcluded);
 
     if (!collectionSlug) {
       ctx.status = 400;
@@ -1091,6 +834,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
+    // Проверяем что коллекция существует и получаем её мета-данные
     const collectionQuery = strapi.db.query("api::catalog-collection.catalog-collection");
     const collection = await collectionQuery.findOne({
       where: { slug: collectionSlug },
@@ -1103,13 +847,11 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    const result = await getCollectionProducts(strapi, collectionSlug, {
-      debug,
-      respectDiscountExcluded,
-    });
+    // Получаем все товары коллекции через общую функцию
+    let allRows = await getCollectionProducts(strapi, collectionSlug);
 
-    let allRows = result.items;
-
+    // Если передан categorySlug — фильтруем товары только из этой категории
+    // и всех её потомков
     const filterCategorySlug = String(ctx.query.categorySlug ?? "").trim();
 
     if (filterCategorySlug) {
@@ -1121,16 +863,19 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       });
 
       if (rootCategory) {
+        // Загружаем все категории чтобы найти всех потомков
         const allCategories = await categoryQuery.findMany({
           select: ["id"],
           populate: { parent: { select: ["id"] } },
           limit: 100000,
         });
 
+        // Собираем id корневой категории + все дочерние
         const allowedCategoryIds = new Set(
           collectDescendantCategoryIds({ rootId: rootCategory.id, all: allCategories }),
         );
 
+        // Оставляем только товары из нужных категорий
         allRows = allRows.filter((p) => {
           const catId = (p as any).category?.id ?? null;
           return catId && allowedCategoryIds.has(catId);
@@ -1168,14 +913,20 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit,
       offset,
       hasMore,
-      ...(debug ? { debug: result.debug ?? null } : {}),
     };
   },
 
+  /**
+   * GET /api/catalog/collection/:slug/categories-tree
+   *
+   * Возвращает плоский список категорий из товаров коллекции.
+   * Фронт передаёт его в buildCatalogTree → получает дерево для CatalogSidebar.
+   *
+   * Формат ответа совпадает с /api/catalog/categories-flat:
+   * [{ id, slug, name, productsCount, parentId }]
+   */
   async collectionCategoriesTree(ctx) {
     const collectionSlug = String(ctx.params.slug ?? "").trim();
-    const debug = toSafeBooleanFlag(ctx.query.debug);
-    const respectDiscountExcluded = toSafeBooleanFlag(ctx.query.respectDiscountExcluded);
 
     if (!collectionSlug) {
       ctx.status = 400;
@@ -1183,20 +934,17 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    const result = await getCollectionProducts(strapi, collectionSlug, {
-      debug,
-      respectDiscountExcluded,
-    });
-
-    const allRows = result.items;
+    // Получаем все товары коллекции
+    const allRows = await getCollectionProducts(strapi, collectionSlug);
 
     if (allRows.length === 0) {
-      ctx.body = debug ? { items: [], debug: result.debug ?? null } : [];
+      ctx.body = [];
       return;
     }
 
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
+    // Собираем уникальные id категорий из товаров
     const categoryIdSet = new Set<number>();
     for (const product of allRows) {
       const catId = (product as any).category?.id ?? null;
@@ -1204,7 +952,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     if (categoryIdSet.size === 0) {
-      ctx.body = debug ? { items: [], debug: result.debug ?? null } : [];
+      ctx.body = [];
       return;
     }
 
@@ -1217,9 +965,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const byId = new Map<number, CategoryRowLite>();
     for (const cat of allCategories) byId.set(cat.id, cat);
 
+    // Для каждой категории товара строим цепочку до корня
+    // и добавляем все категории из цепочки в результирующий Set
     const resultCategoryIds = new Set<number>();
 
     for (const catId of categoryIdSet) {
+      // Идём вверх по дереву от листа к корню
       let currentId: number | null = catId;
       const visited = new Set<number>();
 
@@ -1236,6 +987,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       }
     }
 
+    // Считаем прямые товары по категориям
     const directCountByCategoryId = new Map<number, number>();
     for (const product of allRows) {
       const catId = (product as any).category?.id ?? null;
@@ -1243,6 +995,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       directCountByCategoryId.set(catId, (directCountByCategoryId.get(catId) ?? 0) + 1);
     }
 
+    // Суммируем count вверх по дереву — родитель получает сумму всех потомков
     const productCountByCategoryId = new Map<number, number>(directCountByCategoryId);
 
     for (const catId of resultCategoryIds) {
@@ -1266,7 +1019,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       }
     }
 
-    const items = [];
+    // Формируем плоский список в формате categories-flat
+    const result = [];
     for (const catId of resultCategoryIds) {
       const cat = byId.get(catId);
       if (!cat) continue;
@@ -1277,15 +1031,16 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
       const parentId = cat.parent?.id ?? null;
 
-      items.push({
+      result.push({
         id: String(catId),
         slug,
         name,
+        // productsCount — сколько товаров из коллекции в этой категории
         productsCount: productCountByCategoryId.get(catId) ?? 0,
         parentId: parentId && parentId !== CATALOG_ROOT_PARENT_ID ? String(parentId) : null,
       });
     }
 
-    ctx.body = debug ? { items, debug: result.debug ?? null } : items;
+    ctx.body = result;
   },
 }));
