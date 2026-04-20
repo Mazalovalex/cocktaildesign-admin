@@ -207,7 +207,7 @@ function bundleItemsHaveDiscount(bundleItems?: BundleItemRow[] | null): boolean 
 }
 
 function productHasAnyDiscount(product: ProductRow): boolean {
-  if (product.discountExcluded === true) return false;
+  // if (product.discountExcluded === true) return false;
 
   if (hasRealDiscount(product.price, product.priceOld)) {
     return true;
@@ -328,7 +328,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
   }
 
   // --- sale: все товары со скидкой ---
-  if (selectionMode === "sale") {
+  if (selectionMode === "discount") {
     const rows: ProductRow[] = await productQuery.findMany({
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
