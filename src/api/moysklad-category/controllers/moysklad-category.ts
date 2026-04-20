@@ -25,6 +25,14 @@ function toSafeOffset(value: unknown): number {
   return n;
 }
 
+function toSafeBooleanFlag(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
 function parseIdsQuery(value: unknown, max = 100): number[] {
   if (typeof value !== "string") return [];
 
@@ -172,13 +180,54 @@ type ProductRow = {
   description?: string | null;
   code?: string | null;
   engravingEnabled?: boolean | null;
-  // Флаг — товар не участвует в скидках и промокодах
   discountExcluded?: boolean | null;
   image?: unknown;
-  category?: { id?: number | null; name?: string | null } | null;
+  category?: { id?: number | null; name?: string | null; slug?: string | null } | null;
   specifications?: ProductSpecificationRow[] | null;
   variants?: VariantRow[] | null;
   bundleItems?: BundleItemRow[] | null;
+};
+
+type DiscountDebugItem = {
+  id: number;
+  name: string | null;
+  slug: string | null;
+  price: number | null;
+  priceOld: number | null;
+  discountExcluded: boolean;
+  hasOwnDiscount: boolean;
+  hasVariantDiscount: boolean;
+  hasBundleDiscount: boolean;
+  category: {
+    id: number | null;
+    name: string | null;
+    slug: string | null;
+  } | null;
+  variants: Array<{
+    id: number;
+    name: string | null;
+    price: number | null;
+    priceOld: number | null;
+    hasDiscount: boolean;
+  }>;
+  bundleItems: Array<{
+    id: number;
+    componentProduct: {
+      id: number;
+      name: string | null;
+      slug: string | null;
+      price: number | null;
+      priceOld: number | null;
+      hasOwnDiscount: boolean;
+      variants: Array<{
+        id: number;
+        name: string | null;
+        price: number | null;
+        priceOld: number | null;
+        hasDiscount: boolean;
+      }>;
+    } | null;
+  }>;
 };
 
 function hasRealDiscount(price?: number | null, priceOld?: number | null): boolean {
@@ -206,8 +255,10 @@ function bundleItemsHaveDiscount(bundleItems?: BundleItemRow[] | null): boolean 
   });
 }
 
-function productHasAnyDiscount(product: ProductRow): boolean {
-  // if (product.discountExcluded === true) return false;
+function productHasAnyDiscount(product: ProductRow, respectDiscountExcluded = false): boolean {
+  if (respectDiscountExcluded && product.discountExcluded === true) {
+    return false;
+  }
 
   if (hasRealDiscount(product.price, product.priceOld)) {
     return true;
@@ -222,6 +273,58 @@ function productHasAnyDiscount(product: ProductRow): boolean {
   }
 
   return false;
+}
+
+function buildDiscountDebugItem(product: ProductRow): DiscountDebugItem {
+  return {
+    id: product.id,
+    name: product.name ?? null,
+    slug: product.slug ?? null,
+    price: typeof product.price === "number" ? product.price : null,
+    priceOld: typeof product.priceOld === "number" ? product.priceOld : null,
+    discountExcluded: product.discountExcluded === true,
+    hasOwnDiscount: hasRealDiscount(product.price, product.priceOld),
+    hasVariantDiscount: variantsHaveDiscount(product.variants),
+    hasBundleDiscount: bundleItemsHaveDiscount(product.bundleItems),
+    category: product.category
+      ? {
+          id: product.category.id ?? null,
+          name: product.category.name ?? null,
+          slug: product.category.slug ?? null,
+        }
+      : null,
+    variants: (product.variants ?? []).map((variant) => ({
+      id: variant.id,
+      name: variant.name ?? null,
+      price: typeof variant.price === "number" ? variant.price : null,
+      priceOld: typeof variant.priceOld === "number" ? variant.priceOld : null,
+      hasDiscount: hasRealDiscount(variant.price, variant.priceOld),
+    })),
+    bundleItems: (product.bundleItems ?? []).map((item) => {
+      const componentProduct = item.componentProduct ?? null;
+
+      return {
+        id: item.id,
+        componentProduct: componentProduct
+          ? {
+              id: componentProduct.id,
+              name: componentProduct.name ?? null,
+              slug: componentProduct.slug ?? null,
+              price: typeof componentProduct.price === "number" ? componentProduct.price : null,
+              priceOld: typeof componentProduct.priceOld === "number" ? componentProduct.priceOld : null,
+              hasOwnDiscount: hasRealDiscount(componentProduct.price, componentProduct.priceOld),
+              variants: (componentProduct.variants ?? []).map((variant) => ({
+                id: variant.id,
+                name: variant.name ?? null,
+                price: typeof variant.price === "number" ? variant.price : null,
+                priceOld: typeof variant.priceOld === "number" ? variant.priceOld : null,
+                hasDiscount: hasRealDiscount(variant.price, variant.priceOld),
+              })),
+            }
+          : null,
+      };
+    }),
+  };
 }
 
 function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
@@ -239,36 +342,66 @@ function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
   }));
 }
 
-// ----------------------------------------------------------------------------
-// getCollectionProducts
-// Вспомогательная функция — берёт товары коллекции по её selectionMode.
-// Используется в двух handlers: collectionProducts и collectionCategoriesTree.
-// ----------------------------------------------------------------------------
-async function getCollectionProducts(strapi: any, collectionSlug: string): Promise<ProductRow[]> {
+async function getCollectionProducts(
+  strapi: any,
+  collectionSlug: string,
+  options?: {
+    debug?: boolean;
+    respectDiscountExcluded?: boolean;
+  },
+): Promise<{
+  items: ProductRow[];
+  debug?: {
+    selectionMode: string;
+    sourceRowsCount: number;
+    discountedRowsCount: number;
+    respectDiscountExcluded: boolean;
+    discountedItems: DiscountDebugItem[];
+  };
+}> {
+  const debug = options?.debug ?? false;
+  const respectDiscountExcluded = options?.respectDiscountExcluded ?? false;
+
   const collectionQuery = strapi.db.query("api::catalog-collection.catalog-collection");
   const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
   const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
-  // Находим коллекцию по slug
   const collection = await collectionQuery.findOne({
     where: { slug: collectionSlug },
+    select: ["id", "slug", "selectionMode"],
     populate: {
       products: { select: ["id"] },
       sourceCategory: { select: ["id", "slug"] },
     },
   });
 
-  if (!collection) return [];
+  if (!collection) {
+    return { items: [] };
+  }
 
   const selectionMode = collection.selectionMode ?? "manual";
 
-  // --- manual: товары выбраны вручную в админке ---
   if (selectionMode === "manual") {
     const productIds = (collection.products ?? []).map((p: any) => p.id);
 
-    if (productIds.length === 0) return [];
+    if (productIds.length === 0) {
+      return {
+        items: [],
+        ...(debug
+          ? {
+              debug: {
+                selectionMode,
+                sourceRowsCount: 0,
+                discountedRowsCount: 0,
+                respectDiscountExcluded,
+                discountedItems: [],
+              },
+            }
+          : {}),
+      };
+    }
 
-    return productQuery.findMany({
+    const rows: ProductRow[] = await productQuery.findMany({
       where: { id: { $in: productIds } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -281,22 +414,79 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
           },
           orderBy: { id: "asc" },
         },
+        bundleItems: {
+          populate: {
+            componentProduct: {
+              select: ["id", "name", "slug", "price", "priceOld"],
+              populate: {
+                variants: {
+                  select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+                  orderBy: { id: "asc" },
+                },
+              },
+            },
+          },
+        },
       },
       limit: 100000,
     });
+
+    return {
+      items: rows,
+      ...(debug
+        ? {
+            debug: {
+              selectionMode,
+              sourceRowsCount: rows.length,
+              discountedRowsCount: rows.length,
+              respectDiscountExcluded,
+              discountedItems: rows.map(buildDiscountDebugItem),
+            },
+          }
+        : {}),
+    };
   }
 
-  // --- category: все товары из указанной категории ---
   if (selectionMode === "category") {
     const sourceCategorySlug = collection.sourceCategory?.slug ?? null;
-    if (!sourceCategorySlug) return [];
+    if (!sourceCategorySlug) {
+      return {
+        items: [],
+        ...(debug
+          ? {
+              debug: {
+                selectionMode,
+                sourceRowsCount: 0,
+                discountedRowsCount: 0,
+                respectDiscountExcluded,
+                discountedItems: [],
+              },
+            }
+          : {}),
+      };
+    }
 
     const rootCategory = await categoryQuery.findOne({
       where: { slug: sourceCategorySlug },
       select: ["id"],
     });
 
-    if (!rootCategory) return [];
+    if (!rootCategory) {
+      return {
+        items: [],
+        ...(debug
+          ? {
+              debug: {
+                selectionMode,
+                sourceRowsCount: 0,
+                discountedRowsCount: 0,
+                respectDiscountExcluded,
+                discountedItems: [],
+              },
+            }
+          : {}),
+      };
+    }
 
     const allCategories = await categoryQuery.findMany({
       select: ["id"],
@@ -309,7 +499,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       all: allCategories,
     });
 
-    return productQuery.findMany({
+    const rows: ProductRow[] = await productQuery.findMany({
       where: { category: { id: { $in: categoryIds } } },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -322,12 +512,39 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
           },
           orderBy: { id: "asc" },
         },
+        bundleItems: {
+          populate: {
+            componentProduct: {
+              select: ["id", "name", "slug", "price", "priceOld"],
+              populate: {
+                variants: {
+                  select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+                  orderBy: { id: "asc" },
+                },
+              },
+            },
+          },
+        },
       },
       limit: 100000,
     });
+
+    return {
+      items: rows,
+      ...(debug
+        ? {
+            debug: {
+              selectionMode,
+              sourceRowsCount: rows.length,
+              discountedRowsCount: rows.length,
+              respectDiscountExcluded,
+              discountedItems: rows.map(buildDiscountDebugItem),
+            },
+          }
+        : {}),
+    };
   }
 
-  // --- sale: все товары со скидкой ---
   if (selectionMode === "discount") {
     const rows: ProductRow[] = await productQuery.findMany({
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
@@ -358,59 +575,41 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       limit: 100000,
     });
 
-    const discountedRows = rows.filter(productHasAnyDiscount);
+    const discountedRows = rows.filter((product) => productHasAnyDiscount(product, respectDiscountExcluded));
 
-    console.log(
-      "DISCOUNT DEBUG:",
-      discountedRows.map((product) => ({
-        id: product.id,
-        name: product.name,
-        slug: product.slug,
-        price: product.price,
-        priceOld: product.priceOld,
-        discountExcluded: product.discountExcluded,
-
-        hasOwnDiscount: hasRealDiscount(product.price, product.priceOld),
-        hasVariantDiscount: variantsHaveDiscount(product.variants),
-        hasBundleDiscount: bundleItemsHaveDiscount(product.bundleItems),
-
-        variants: (product.variants ?? []).map((v) => ({
-          id: v.id,
-          name: v.name,
-          price: v.price,
-          priceOld: v.priceOld,
-        })),
-
-        bundleItems: (product.bundleItems ?? []).map((item) => ({
-          id: item.id,
-          componentProduct: item.componentProduct
-            ? {
-                id: item.componentProduct.id,
-                name: item.componentProduct.name,
-                price: item.componentProduct.price,
-                priceOld: item.componentProduct.priceOld,
-                variants: (item.componentProduct.variants ?? []).map((v) => ({
-                  id: v.id,
-                  name: v.name,
-                  price: v.price,
-                  priceOld: v.priceOld,
-                })),
-              }
-            : null,
-        })),
-      })),
-    );
-
-    return discountedRows;
+    return {
+      items: discountedRows,
+      ...(debug
+        ? {
+            debug: {
+              selectionMode,
+              sourceRowsCount: rows.length,
+              discountedRowsCount: discountedRows.length,
+              respectDiscountExcluded,
+              discountedItems: discountedRows.map(buildDiscountDebugItem),
+            },
+          }
+        : {}),
+    };
   }
 
-  return [];
+  return {
+    items: [],
+    ...(debug
+      ? {
+          debug: {
+            selectionMode,
+            sourceRowsCount: 0,
+            discountedRowsCount: 0,
+            respectDiscountExcluded,
+            discountedItems: [],
+          },
+        }
+      : {}),
+  };
 }
 
 export default factories.createCoreController("api::moysklad-category.moysklad-category", ({ strapi }) => ({
-  /**
-   * POST /api/moysklad/sync/categories
-   */
   async syncAll(ctx) {
     const secret = ctx.request.headers["x-webhook-secret"];
 
@@ -437,9 +636,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
   },
 
-  /**
-   * GET /api/catalog/categories-flat
-   */
   async categoriesFlat(ctx) {
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
@@ -458,9 +654,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }));
   },
 
-  /**
-   * GET /api/catalog/products
-   */
   async products(ctx) {
     const categorySlug = String(ctx.query.categorySlug ?? "").trim();
     const limit = toSafeLimit(ctx.query.limit, 50);
@@ -542,48 +735,19 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-  /**
-   * GET /api/catalog/products-discounted
-   */
   async productsDiscounted(ctx) {
     const limit = toSafeLimit(ctx.query.limit, 50);
     const offset = toSafeOffset(ctx.query.offset);
+    const debug = toSafeBooleanFlag(ctx.query.debug);
+    const respectDiscountExcluded = toSafeBooleanFlag(ctx.query.respectDiscountExcluded);
 
-    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
-
-    const rows: ProductRow[] = await productQuery.findMany({
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
-      populate: {
-        image: { select: ["url", "alternativeText", "formats"] },
-        variants: {
-          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
-          populate: {
-            image: { select: ["url", "alternativeText", "formats"] },
-          },
-          orderBy: { id: "asc" },
-        },
-        bundleItems: {
-          populate: {
-            componentProduct: {
-              select: ["id", "name", "slug", "price", "priceOld"],
-              populate: {
-                variants: {
-                  select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
-                  orderBy: { id: "asc" },
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { id: "desc" },
-      limit: 100000,
+    const result = await getCollectionProducts(strapi, "sale", {
+      debug,
+      respectDiscountExcluded,
     });
 
-    const discountedRows = rows.filter(productHasAnyDiscount);
-
-    const total = discountedRows.length;
-    const paginatedRows = discountedRows.slice(offset, offset + limit);
+    const total = result.items.length;
+    const paginatedRows = result.items.slice(offset, offset + limit);
     const hasMore = offset + paginatedRows.length < total;
 
     ctx.body = {
@@ -606,12 +770,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit,
       offset,
       hasMore,
+      ...(debug ? { debug: result.debug ?? null } : {}),
     };
   },
 
-  /**
-   * GET /api/catalog/products-by-ids
-   */
   async productsByIds(ctx) {
     const ids = parseIdsQuery(ctx.query.ids);
 
@@ -661,9 +823,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-  /**
-   * GET /api/catalog/product?slug=ms-xxxxxxx
-   */
   async productBySlug(ctx) {
     console.log("PRODUCT BY SLUG CONTROLLER HIT");
     console.log("PRODUCT BY SLUG QUERY:", ctx.query);
@@ -835,9 +994,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-  /**
-   * GET /api/catalog/search?q=шейкер
-   */
   async search(ctx) {
     const q = String(ctx.query.q ?? "").trim();
 
@@ -878,9 +1034,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-  /**
-   * GET /api/catalog/random-products?count=2
-   */
   async randomProducts(ctx) {
     const count = Math.min(Math.max(Number(ctx.query.count ?? 2), 1), 6);
 
@@ -925,19 +1078,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     };
   },
 
-  /**
-   * GET /api/catalog/collection/:slug/products
-   *
-   * Возвращает товары коллекции с пагинацией.
-   * Логика зависит от selectionMode коллекции:
-   * - manual: товары выбраны вручную в админке
-   * - category: все товары из указанной категории
-   * - sale: все товары со скидкой
-   */
   async collectionProducts(ctx) {
     const collectionSlug = String(ctx.params.slug ?? "").trim();
     const limit = toSafeLimit(ctx.query.limit, 50);
     const offset = toSafeOffset(ctx.query.offset);
+    const debug = toSafeBooleanFlag(ctx.query.debug);
+    const respectDiscountExcluded = toSafeBooleanFlag(ctx.query.respectDiscountExcluded);
 
     if (!collectionSlug) {
       ctx.status = 400;
@@ -957,7 +1103,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    let allRows = await getCollectionProducts(strapi, collectionSlug);
+    const result = await getCollectionProducts(strapi, collectionSlug, {
+      debug,
+      respectDiscountExcluded,
+    });
+
+    let allRows = result.items;
 
     const filterCategorySlug = String(ctx.query.categorySlug ?? "").trim();
 
@@ -1017,20 +1168,14 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit,
       offset,
       hasMore,
+      ...(debug ? { debug: result.debug ?? null } : {}),
     };
   },
 
-  /**
-   * GET /api/catalog/collection/:slug/categories-tree
-   *
-   * Возвращает плоский список категорий из товаров коллекции.
-   * Фронт передаёт его в buildCatalogTree → получает дерево для CatalogSidebar.
-   *
-   * Формат ответа совпадает с /api/catalog/categories-flat:
-   * [{ id, slug, name, productsCount, parentId }]
-   */
   async collectionCategoriesTree(ctx) {
     const collectionSlug = String(ctx.params.slug ?? "").trim();
+    const debug = toSafeBooleanFlag(ctx.query.debug);
+    const respectDiscountExcluded = toSafeBooleanFlag(ctx.query.respectDiscountExcluded);
 
     if (!collectionSlug) {
       ctx.status = 400;
@@ -1038,10 +1183,15 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
-    const allRows = await getCollectionProducts(strapi, collectionSlug);
+    const result = await getCollectionProducts(strapi, collectionSlug, {
+      debug,
+      respectDiscountExcluded,
+    });
+
+    const allRows = result.items;
 
     if (allRows.length === 0) {
-      ctx.body = [];
+      ctx.body = debug ? { items: [], debug: result.debug ?? null } : [];
       return;
     }
 
@@ -1054,7 +1204,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     if (categoryIdSet.size === 0) {
-      ctx.body = [];
+      ctx.body = debug ? { items: [], debug: result.debug ?? null } : [];
       return;
     }
 
@@ -1116,7 +1266,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       }
     }
 
-    const result = [];
+    const items = [];
     for (const catId of resultCategoryIds) {
       const cat = byId.get(catId);
       if (!cat) continue;
@@ -1127,7 +1277,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
       const parentId = cat.parent?.id ?? null;
 
-      result.push({
+      items.push({
         id: String(catId),
         slug,
         name,
@@ -1136,6 +1286,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       });
     }
 
-    ctx.body = result;
+    ctx.body = debug ? { items, debug: result.debug ?? null } : items;
   },
 }));
