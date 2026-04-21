@@ -45,6 +45,9 @@
     },
     "giftDescription": {
       "type": "string"
+    },
+    "bonusMessage": {
+      "type": "text"
     }
   }
 }

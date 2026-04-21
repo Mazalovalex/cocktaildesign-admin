@@ -858,15 +858,19 @@ export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
     draftAndPublish: false;
   };
   attributes: {
+    bonusMessage: Schema.Attribute.Text;
     code: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
-    discountType: Schema.Attribute.Enumeration<['percent', 'fixed']> &
+    discountType: Schema.Attribute.Enumeration<
+      ['percent', 'fixed', 'inventory', 'startup']
+    > &
       Schema.Attribute.Required;
     discountValue: Schema.Attribute.Decimal;
+    giftDescription: Schema.Attribute.String;
     isActive: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
@@ -874,6 +878,7 @@ export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
       'api::promo-code.promo-code'
     > &
       Schema.Attribute.Private;
+    minOrderAmount: Schema.Attribute.Integer;
     publishedAt: Schema.Attribute.DateTime;
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
