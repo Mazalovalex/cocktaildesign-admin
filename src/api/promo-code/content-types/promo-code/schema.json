@@ -21,7 +21,9 @@
       "required": true,
       "enum": [
         "percent",
-        "fixed"
+        "fixed",
+        "inventory",
+        "startup"
       ]
     },
     "discountValue": {
@@ -37,6 +39,12 @@
     "usageCount": {
       "type": "integer",
       "default": 0
+    },
+    "minOrderAmount": {
+      "type": "integer"
+    },
+    "giftDescription": {
+      "type": "string"
     }
   }
 }
