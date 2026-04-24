@@ -8,11 +8,41 @@ function msHeaders() {
 }
 
 async function findProductHref(code: string): Promise<string | null> {
-  const res = await fetch(`${MS_BASE}/entity/product?filter=code=${code}`, {
-    headers: msHeaders(),
-  });
-  const data = (await res.json()) as { rows: { meta: { href: string } }[] };
-  return data.rows?.[0]?.meta?.href ?? null;
+  // Экранируем значение — защита от слэшей и спецсимволов в артикулах (например JigV30/60)
+  const filter = encodeURIComponent(`code=${code}`);
+  const url = `${MS_BASE}/entity/product?filter=${filter}&limit=10`;
+
+  const res = await fetch(url, { headers: msHeaders() });
+
+  if (!res.ok) {
+    strapi.log.error(`[MS findProductHref] HTTP ${res.status} для code=${code}`);
+    return null;
+  }
+
+  const data = (await res.json()) as {
+    rows: { code?: string; article?: string; name?: string; meta: { href: string } }[];
+  };
+
+  const rows = data.rows ?? [];
+
+  // Ищем точное совпадение по code
+  const exact = rows.find((r) => r.code === code);
+  if (exact) return exact.meta.href;
+
+  // Fallback: вдруг артикул хранится в поле article, а не в code
+  const byArticle = rows.find((r) => r.article === code);
+  if (byArticle) {
+    strapi.log.warn(`[MS findProductHref] ${code} найден по article, а не по code`);
+    return byArticle.meta.href;
+  }
+
+  // Товар реально не найден — логируем подробно, чтобы было понятно почему
+  strapi.log.warn(
+    `[MS findProductHref] Нет точного совпадения для "${code}". ` +
+      `МС вернул ${rows.length} строк. Первые 3: ` +
+      JSON.stringify(rows.slice(0, 3).map((r) => ({ code: r.code, article: r.article, name: r.name }))),
+  );
+  return null;
 }
 
 async function createCounterparty(name: string, phone: string): Promise<string> {
