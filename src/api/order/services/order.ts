@@ -4,13 +4,15 @@ function msHeaders() {
   return {
     Authorization: `Bearer ${process.env.MOYSKLAD_ACCESS_TOKEN}`,
     "Content-Type": "application/json",
+    "Accept-Encoding": "gzip",
   };
 }
 
-async function findProductHref(code: string): Promise<string | null> {
-  // Экранируем значение — защита от слэшей и спецсимволов в артикулах (например JigV30/60)
+async function findProductHref(code: string): Promise<{ href: string; type: string } | null> {
+  // Assortment возвращает всё: products, bundles, services, variants
+  // Нужно именно оно, т.к. часть SKU в МС лежит как bundle (например Speed-opener'ы)
   const filter = encodeURIComponent(`code=${code}`);
-  const url = `${MS_BASE}/entity/product?filter=${filter}&limit=10`;
+  const url = `${MS_BASE}/entity/assortment?filter=${filter}&limit=10`;
 
   const res = await fetch(url, { headers: msHeaders() });
 
@@ -20,23 +22,29 @@ async function findProductHref(code: string): Promise<string | null> {
   }
 
   const data = (await res.json()) as {
-    rows: { code?: string; article?: string; name?: string; meta: { href: string } }[];
+    rows: {
+      code?: string;
+      article?: string;
+      name?: string;
+      meta: { href: string; type: string };
+    }[];
   };
 
   const rows = data.rows ?? [];
 
-  // Ищем точное совпадение по code
+  // Точное совпадение по code
   const exact = rows.find((r) => r.code === code);
-  if (exact) return exact.meta.href;
+  if (exact) {
+    return { href: exact.meta.href, type: exact.meta.type };
+  }
 
-  // Fallback: вдруг артикул хранится в поле article, а не в code
+  // Fallback: вдруг артикул в поле article, а не code
   const byArticle = rows.find((r) => r.article === code);
   if (byArticle) {
     strapi.log.warn(`[MS findProductHref] ${code} найден по article, а не по code`);
-    return byArticle.meta.href;
+    return { href: byArticle.meta.href, type: byArticle.meta.type };
   }
 
-  // Товар реально не найден — логируем подробно, чтобы было понятно почему
   strapi.log.warn(
     `[MS findProductHref] Нет точного совпадения для "${code}". ` +
       `МС вернул ${rows.length} строк. Первые 3: ` +
@@ -62,10 +70,15 @@ async function createCounterparty(name: string, phone: string): Promise<string> 
 
 async function createCustomerOrder(params: {
   agentHref: string;
-  positions: { productHref: string; quantity: number; price: number; engraving: boolean }[];
+  positions: {
+    productHref: string;
+    productType: string;
+    quantity: number;
+    price: number;
+    engraving: boolean;
+  }[];
   description: string;
   shipmentAddress: string;
-  // Скидка за объём в процентах — если есть, проставляем во все позиции
   volumeDiscountPercent?: number;
 }): Promise<{ id: string; name: string }> {
   const body = {
@@ -118,15 +131,13 @@ async function createCustomerOrder(params: {
     positions: params.positions.map((p) => ({
       quantity: p.quantity,
       price: p.price * 100,
-      // Скидка за объём — только для товаров без флага discountExcluded
-      // Если скидки нет — 0
       discount: params.volumeDiscountPercent ?? 0,
       vat: 0,
       vatEnabled: false,
       assortment: {
         meta: {
           href: p.productHref,
-          type: "product",
+          type: p.productType,
           mediaType: "application/json",
         },
       },

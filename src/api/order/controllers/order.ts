@@ -45,19 +45,26 @@ export default {
       // 1. Создаём контрагента
       const agentHref = await orderService.createCounterparty(name, phone);
 
-      // 2. Ищем товары по артикулу
-      const positions: { productHref: string; quantity: number; price: number; engraving: boolean }[] = [];
+      // 2. Ищем товары по артикулу в ассортименте МС
+      const positions: {
+        productHref: string;
+        productType: string;
+        quantity: number;
+        price: number;
+        engraving: boolean;
+      }[] = [];
 
       for (const item of items) {
-        const productHref = await orderService.findProductHref(item.code);
+        const found = await orderService.findProductHref(item.code);
 
-        if (!productHref) {
+        if (!found) {
           strapi.log.warn(`Товар не найден в МойСклад: ${item.code} (${item.name})`);
           continue;
         }
 
         positions.push({
-          productHref,
+          productHref: found.href,
+          productType: found.type,
           quantity: item.quantity,
           price: item.price,
           engraving: item.engraving,
@@ -89,7 +96,6 @@ export default {
         positions,
         description: descriptionParts.join(" | "),
         shipmentAddress: address,
-        // Передаём процент скидки за объём — проставится в каждую позицию
         volumeDiscountPercent: volumeDiscountPercent,
       });
 
