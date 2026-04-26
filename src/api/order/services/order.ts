@@ -76,6 +76,7 @@ async function createCustomerOrder(params: {
     quantity: number;
     price: number;
     engraving: boolean;
+    discountExcluded: boolean;
   }[];
   description: string;
   shipmentAddress: string;
@@ -131,7 +132,8 @@ async function createCustomerOrder(params: {
     positions: params.positions.map((p) => ({
       quantity: p.quantity,
       price: p.price * 100,
-      discount: params.volumeDiscountPercent ?? 0,
+      // Скидка за объём применяется только если товар НЕ исключён из скидок
+      discount: p.discountExcluded ? 0 : (params.volumeDiscountPercent ?? 0),
       vat: 0,
       vatEnabled: false,
       assortment: {

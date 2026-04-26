@@ -341,6 +341,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
    *
    * Порядок применяется на ВСЕХ уровнях дерева — фронт строит
    * дерево из плоского массива и порядок сохраняется.
+   *
+   * В ответе есть imageUrl и alt — чтобы можно было использовать дерево
+   * везде, где раньше использовался getTopCategoriesFromStrapi (плитки
+   * с картинками на /catalog, главной, мобильный drill-down).
    */
   async categoriesFlat(ctx) {
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
@@ -352,7 +356,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         $or: [{ isHiddenInMenu: false }, { isHiddenInMenu: { $null: true } }],
       },
       select: ["id", "name", "slug", "productsCount", "menuOrder", "isHiddenInMenu"],
-      populate: { parent: { select: ["id"] } },
+      populate: {
+        parent: { select: ["id"] },
+        // Подтягиваем картинку категории — нужна для фронта
+        // (плитки на /catalog, главная, мобильный drill-down)
+        image: { select: ["url", "alternativeText", "formats"] },
+      },
       limit: 100000,
     });
 
@@ -385,13 +394,35 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return nameA.localeCompare(nameB, "ru");
     });
 
-    ctx.body = sorted.map((c: any) => ({
-      id: String(c.id),
-      slug: typeof c.slug === "string" ? c.slug : "",
-      name: typeof c.name === "string" ? c.name : "",
-      productsCount: toSafeCount(c.productsCount),
-      parentId: c.parent?.id ? String(c.parent.id) : null,
-    }));
+    // Преобразуем результат в плоский формат для фронта.
+    // Картинку отдаём как готовый URL (без массива форматов) и поле alt.
+    ctx.body = sorted.map((c: any) => {
+      // Достаём картинку — берём лучший доступный размер
+      // medium → small → thumbnail → оригинал
+      const image = c.image ?? null;
+      const imagePath =
+        image?.formats?.medium?.url ??
+        image?.formats?.small?.url ??
+        image?.formats?.thumbnail?.url ??
+        image?.url ??
+        null;
+
+      // Alt-текст: если в Strapi задан alternativeText — берём его,
+      // иначе используем имя категории
+      const altFromStrapi = typeof image?.alternativeText === "string" ? image.alternativeText.trim() : "";
+      const alt = altFromStrapi || (typeof c.name === "string" ? c.name : "");
+
+      return {
+        id: String(c.id),
+        slug: typeof c.slug === "string" ? c.slug : "",
+        name: typeof c.name === "string" ? c.name : "",
+        productsCount: toSafeCount(c.productsCount),
+        parentId: c.parent?.id ? String(c.parent.id) : null,
+        // Новые поля — для замены getTopCategoriesFromStrapi
+        imageUrl: imagePath,
+        alt,
+      };
+    });
   },
 
   /**

@@ -26,7 +26,14 @@ export default {
       inn?: string;
       address: string;
       comment?: string;
-      items: { code: string; name: string; quantity: number; price: number; engraving: boolean }[];
+      items: {
+        code: string;
+        name: string;
+        quantity: number;
+        price: number;
+        engraving: boolean;
+        discountExcluded?: boolean;
+      }[];
       promoCode?: string;
       promoDiscount?: number;
       volumeDiscount?: number;
@@ -52,6 +59,7 @@ export default {
         quantity: number;
         price: number;
         engraving: boolean;
+        discountExcluded: boolean;
       }[] = [];
 
       for (const item of items) {
@@ -68,6 +76,7 @@ export default {
           quantity: item.quantity,
           price: item.price,
           engraving: item.engraving,
+          discountExcluded: item.discountExcluded ?? false,
         });
       }
 
