@@ -1,3 +1,4 @@
+//backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
 import syncServiceFactory from "../services/sync";
 
@@ -330,17 +331,61 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/categories-flat
+   *
+   * Отдаёт плоский список категорий для построения меню на фронте.
+   *
+   * Логика сортировки и фильтрации:
+   * 1. Скрытые категории (isHiddenInMenu = true) НЕ отдаются вообще
+   * 2. Сначала идут категории с заданным menuOrder (по возрастанию)
+   * 3. Потом — категории без menuOrder (новые из МойСклад) по алфавиту
+   *
+   * Порядок применяется на ВСЕХ уровнях дерева — фронт строит
+   * дерево из плоского массива и порядок сохраняется.
    */
   async categoriesFlat(ctx) {
     const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
 
+    // Берём только видимые категории
+    // (isHiddenInMenu может быть false ИЛИ null — оба значения считаем "видимая")
     const rows = await categoryQuery.findMany({
-      select: ["id", "name", "slug", "productsCount"],
+      where: {
+        $or: [{ isHiddenInMenu: false }, { isHiddenInMenu: { $null: true } }],
+      },
+      select: ["id", "name", "slug", "productsCount", "menuOrder", "isHiddenInMenu"],
       populate: { parent: { select: ["id"] } },
       limit: 100000,
     });
 
-    ctx.body = rows.map((c: any) => ({
+    // Сортируем категории:
+    // 1) Если у обеих задан menuOrder — сравниваем по нему
+    // 2) Если только у одной — она идёт первой
+    // 3) Если у обеих не задан — сортируем по имени (алфавит)
+    const sorted = [...rows].sort((a: any, b: any) => {
+      const orderA = typeof a.menuOrder === "number" ? a.menuOrder : null;
+      const orderB = typeof b.menuOrder === "number" ? b.menuOrder : null;
+
+      // Обе с явным порядком — сравниваем числа
+      if (orderA !== null && orderB !== null) {
+        return orderA - orderB;
+      }
+
+      // Только у A есть порядок — A идёт первой
+      if (orderA !== null && orderB === null) {
+        return -1;
+      }
+
+      // Только у B есть порядок — B идёт первой
+      if (orderA === null && orderB !== null) {
+        return 1;
+      }
+
+      // У обеих нет порядка — сортируем по имени (алфавит, регистронезависимо)
+      const nameA = typeof a.name === "string" ? a.name : "";
+      const nameB = typeof b.name === "string" ? b.name : "";
+      return nameA.localeCompare(nameB, "ru");
+    });
+
+    ctx.body = sorted.map((c: any) => ({
       id: String(c.id),
       slug: typeof c.slug === "string" ? c.slug : "",
       name: typeof c.name === "string" ? c.name : "",

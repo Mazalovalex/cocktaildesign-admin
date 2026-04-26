@@ -28,9 +28,7 @@
     "image": {
       "type": "media",
       "multiple": false,
-      "allowedTypes": [
-        "images"
-      ]
+      "allowedTypes": ["images"]
     },
     "productsCount": {
       "type": "integer",
@@ -42,6 +40,13 @@
     "slug": {
       "type": "string",
       "unique": true
+    },
+    "menuOrder": {
+      "type": "integer"
+    },
+    "isHiddenInMenu": {
+      "type": "boolean",
+      "default": false
     },
     "products": {
       "type": "relation",
