@@ -118,6 +118,10 @@
     "discountExcluded": {
       "type": "boolean",
       "default": false
+    },
+    "isHiddenOnSite": {
+      "type": "boolean",
+      "default": false
     }
   }
 }
