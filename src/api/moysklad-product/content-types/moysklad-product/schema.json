@@ -37,6 +37,9 @@
     "description": {
       "type": "text"
     },
+    "composition": {
+      "type": "text"
+    },
     "engravingEnabled": {
       "type": "boolean",
       "default": false
@@ -73,9 +76,7 @@
     "image": {
       "type": "media",
       "multiple": true,
-      "allowedTypes": [
-        "images"
-      ]
+      "allowedTypes": ["images"]
     },
     "lockImages": {
       "type": "boolean",
@@ -94,10 +95,7 @@
       "type": "enumeration",
       "required": true,
       "default": "product",
-      "enum": [
-        "product",
-        "bundle"
-      ]
+      "enum": ["product", "bundle"]
     },
     "bundleComponentItems": {
       "type": "relation",

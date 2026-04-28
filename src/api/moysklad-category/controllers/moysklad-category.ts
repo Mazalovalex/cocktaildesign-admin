@@ -160,6 +160,8 @@ type ProductRow = {
   engravingEnabled?: boolean | null;
   // Флаг — товар не участвует в скидках и промокодах
   discountExcluded?: boolean | null;
+  // Состав/комплектация — каждая строка = пункт списка на фронте
+  composition?: string | null;
   image?: unknown;
   category?: { id?: number | null; name?: string | null } | null;
   specifications?: ProductSpecificationRow[] | null;
@@ -651,6 +653,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         "engravingEnabled",
         "code",
         "discountExcluded",
+        "composition",
       ],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
@@ -787,6 +790,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           price: product.price ?? null,
           priceOld: product.priceOld ?? null,
           description: product.description ?? null,
+          composition: product.composition ?? null,
           image: Array.isArray((product as any).image) ? (product as any).image : [],
           specifications,
           engravingEnabled: product.engravingEnabled ?? false,
