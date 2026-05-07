@@ -1,10 +1,15 @@
 // apps/strapi/src/api/moysklad-webhook/controllers/moysklad-webhook.ts
+import { timingSafeEqual } from "crypto";
 import type { Context } from "koa";
 
 type WebhookEvent = {
   action?: "CREATE" | "UPDATE" | "DELETE" | "PROCESSED" | string;
   meta?: { href?: string; type?: string };
 };
+
+type IncomingSecretSource = "header" | "query" | "missing";
+
+const WEBHOOK_SECRET_HEADER = "x-webhook-secret";
 
 // ✅ Только официальный домен МойСклад — защита от SSRF
 const MOYSKLAD_API_HOST = "https://api.moysklad.ru/";
@@ -15,7 +20,49 @@ function isSafeHref(href: string): boolean {
 
 function getStringQuery(ctx: Context, key: string): string | null {
   const v = (ctx.query as Record<string, unknown>)[key];
-  return typeof v === "string" ? v : null;
+  return typeof v === "string" ? v.trim() : null;
+}
+
+function getStringHeader(ctx: Context, key: string): string | null {
+  const value = ctx.request.headers[key.toLowerCase()];
+
+  if (Array.isArray(value)) {
+    return typeof value[0] === "string" ? value[0].trim() : null;
+  }
+
+  return typeof value === "string" ? value.trim() : null;
+}
+
+function safeCompareSecret(incomingSecret: string, expectedSecret: string): boolean {
+  const incomingBuffer = Buffer.from(incomingSecret);
+  const expectedBuffer = Buffer.from(expectedSecret);
+
+  if (incomingBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return timingSafeEqual(incomingBuffer, expectedBuffer);
+}
+
+function getIncomingSecret(ctx: Context): {
+  value: string | null;
+  source: IncomingSecretSource;
+} {
+  const headerSecret = getStringHeader(ctx, WEBHOOK_SECRET_HEADER);
+
+  if (headerSecret) {
+    return { value: headerSecret, source: "header" };
+  }
+
+  // Временная обратная совместимость.
+  // Старый вариант небезопасен, потому что query может попасть в access logs.
+  const querySecret = getStringQuery(ctx, "secret");
+
+  if (querySecret) {
+    return { value: querySecret, source: "query" };
+  }
+
+  return { value: null, source: "missing" };
 }
 
 /**
@@ -130,17 +177,24 @@ async function processEvent(event: WebhookEvent) {
 export default {
   async handle(ctx: Context) {
     const secret = process.env.MOYSKLAD_WEBHOOK_SECRET;
+
     if (!secret) {
+      strapi.log.error("[moysklad-webhook] MOYSKLAD_WEBHOOK_SECRET is not set");
       ctx.status = 500;
-      ctx.body = { ok: false, error: "MOYSKLAD_WEBHOOK_SECRET is not set" };
+      ctx.body = { ok: false, error: "webhook_not_configured" };
       return;
     }
 
-    const incomingSecret = getStringQuery(ctx, "secret");
-    if (incomingSecret !== secret) {
+    const incomingSecret = getIncomingSecret(ctx);
+
+    if (!incomingSecret.value || !safeCompareSecret(incomingSecret.value, secret)) {
       ctx.status = 401;
       ctx.body = { ok: false };
       return;
+    }
+
+    if (incomingSecret.source === "query") {
+      strapi.log.warn("[moysklad-webhook] deprecated query secret used; use x-webhook-secret header");
     }
 
     const body = ctx.request.body as unknown;
