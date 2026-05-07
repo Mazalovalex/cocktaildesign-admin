@@ -1,68 +1,88 @@
+// backend/src/api/promo-code/controllers/promo-code.ts
 import { factories } from "@strapi/strapi";
+
+type PromoCodeApplyBody = {
+  code?: string;
+  totalPrice?: number;
+};
+
+const MAX_PROMO_CODE_LENGTH = 128;
+const MAX_TOTAL_PRICE = 100_000_000;
+
+function isValidTotalPrice(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_TOTAL_PRICE;
+}
 
 export default factories.createCoreController("api::promo-code.promo-code", ({ strapi }) => ({
   /**
    * POST /api/promo-code/apply
    * Body: { code: string, totalPrice: number }
+   *
+   * Важно:
+   * Этот endpoint только проверяет промокод и считает preview-скидку для frontend.
+   * Он НЕ увеличивает usageCount.
+   * Фактическое использование промокода должно фиксироваться при успешном создании заказа.
    */
   async apply(ctx) {
-    const body = ctx.request.body as { code?: string; totalPrice?: number };
+    const body = ctx.request.body as PromoCodeApplyBody;
 
     const code = String(body.code ?? "")
       .trim()
       .toUpperCase();
+
     const totalPrice = Number(body.totalPrice ?? 0);
 
-    // Проверяем что код не пустой
     if (!code) {
       ctx.status = 400;
       ctx.body = { ok: false, error: "code_required" };
       return;
     }
 
-    // Ищем промокод в базе
+    if (code.length > MAX_PROMO_CODE_LENGTH) {
+      ctx.status = 400;
+      ctx.body = { ok: false, error: "code_invalid" };
+      return;
+    }
+
+    if (!isValidTotalPrice(totalPrice)) {
+      ctx.status = 400;
+      ctx.body = { ok: false, error: "total_price_invalid" };
+      return;
+    }
+
     const promoQuery = strapi.db.query("api::promo-code.promo-code");
 
     const promo = await promoQuery.findOne({
       where: { code },
     });
 
-    // Промокод не найден
     if (!promo) {
       ctx.status = 404;
       ctx.body = { ok: false, error: "not_found" };
       return;
     }
 
-    // Промокод неактивен
     if (!promo.isActive) {
       ctx.status = 400;
       ctx.body = { ok: false, error: "not_active" };
       return;
     }
 
-    // Проверяем лимит использований
-    // usageLimit = null означает безлимитный промокод
+    // usageLimit = null означает безлимитный промокод.
+    // apply только проверяет лимит, но не увеличивает usageCount.
     if (promo.usageLimit !== null && promo.usageCount >= promo.usageLimit) {
       ctx.status = 400;
       ctx.body = { ok: false, error: "limit_reached" };
       return;
     }
 
-    // Проверяем минимальную сумму заказа
     if (promo.minOrderAmount && totalPrice < promo.minOrderAmount) {
       ctx.status = 400;
       ctx.body = { ok: false, error: "min_amount_not_reached", minAmount: promo.minOrderAmount };
       return;
     }
 
-    // Промокод на инвентарь — скидку не даёт, только подарок
     if (promo.discountType === "inventory") {
-      await promoQuery.update({
-        where: { id: promo.id },
-        data: { usageCount: promo.usageCount + 1 },
-      });
-
       ctx.body = {
         ok: true,
         discountType: "inventory",
@@ -74,28 +94,18 @@ export default factories.createCoreController("api::promo-code.promo-code", ({ s
       return;
     }
 
-    // Считаем скидку
     let discountAmount = 0;
     let replacesVolumeDiscount = false;
 
     if (promo.discountType === "percent" || promo.discountType === "startup") {
-      // Процентная скидка и СТАРТАП не суммируются с объёмной
       discountAmount = Math.round((totalPrice * promo.discountValue) / 100);
       replacesVolumeDiscount = true;
     } else if (promo.discountType === "fixed") {
-      // Фиксированная скидка суммируется с объёмной
       discountAmount = promo.discountValue;
       replacesVolumeDiscount = false;
     }
 
-    // Скидка не может быть больше суммы заказа
     discountAmount = Math.min(discountAmount, totalPrice);
-
-    // Увеличиваем счётчик использований
-    await promoQuery.update({
-      where: { id: promo.id },
-      data: { usageCount: promo.usageCount + 1 },
-    });
 
     ctx.body = {
       ok: true,
@@ -104,7 +114,6 @@ export default factories.createCoreController("api::promo-code.promo-code", ({ s
       discountAmount,
       finalPrice: totalPrice - discountAmount,
       replacesVolumeDiscount,
-      // Плашка с бонусами — если заполнена в админке
       bonusMessage: promo.bonusMessage || "",
     };
   },
