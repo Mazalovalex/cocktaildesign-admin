@@ -1,11 +1,39 @@
 const MS_BASE = "https://api.moysklad.ru/api/remap/1.2";
 
+type OrderErrorCode =
+  | "invalid_item_code"
+  | "item_not_found"
+  | "item_price_missing"
+  | "item_price_invalid";
+
+type ResolvedOrderItem = {
+  href: string;
+  type: string;
+  trustedName: string;
+  trustedPriceRub: number;
+  trustedDiscountExcluded: boolean;
+};
+
 function msHeaders() {
   return {
     Authorization: `Bearer ${process.env.MOYSKLAD_ACCESS_TOKEN}`,
     "Content-Type": "application/json",
     "Accept-Encoding": "gzip",
   };
+}
+
+function createOrderError(code: OrderErrorCode): Error & { code: OrderErrorCode } {
+  const error = new Error(code) as Error & { code: OrderErrorCode };
+  error.code = code;
+  return error;
+}
+
+function normalizeCode(code: string): string {
+  return code.trim();
+}
+
+function isValidPriceRub(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value > 0;
 }
 
 async function findProductHref(code: string): Promise<{ href: string; type: string } | null> {
@@ -51,6 +79,139 @@ async function findProductHref(code: string): Promise<{ href: string; type: stri
       JSON.stringify(rows.slice(0, 3).map((r) => ({ code: r.code, article: r.article, name: r.name }))),
   );
   return null;
+}
+
+async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderItem> {
+  const code = normalizeCode(rawCode);
+
+  if (!code) {
+    throw createOrderError("invalid_item_code");
+  }
+
+  const variantQuery = strapi.db.query("api::moysklad-variant.moysklad-variant");
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+  const variant = await variantQuery.findOne({
+    where: { code },
+    select: ["id", "name", "price", "href"],
+    populate: {
+      product: {
+        select: ["id", "name", "price", "discountExcluded", "href", "type"],
+      },
+    },
+  });
+
+  if (variant) {
+    const parentProduct = variant.product ?? null;
+    const resolvedPrice = isValidPriceRub(variant.price)
+      ? variant.price
+      : isValidPriceRub(parentProduct?.price)
+        ? parentProduct.price
+        : null;
+
+    if (resolvedPrice === null) {
+      if (variant.price === null || variant.price === undefined) {
+        throw createOrderError("item_price_missing");
+      }
+      throw createOrderError("item_price_invalid");
+    }
+
+    let href = variant.href ?? null;
+    let type = "variant";
+
+    if (variant.href) {
+      href = variant.href;
+      type = "variant";
+    } else {
+      const live = await findProductHref(code);
+      if (live) {
+        href = live.href;
+        type = live.type;
+      }
+    }
+
+    if (!href) {
+      throw createOrderError("item_not_found");
+    }
+
+    return {
+      href,
+      type,
+      trustedName: (variant.name || parentProduct?.name || code).trim(),
+      trustedPriceRub: resolvedPrice,
+      trustedDiscountExcluded: Boolean(parentProduct?.discountExcluded ?? false),
+    };
+  }
+
+  const product = await productQuery.findOne({
+    where: { code },
+    select: ["id", "name", "price", "discountExcluded", "href", "type"],
+  });
+
+  if (!product) {
+    throw createOrderError("item_not_found");
+  }
+
+  if (product.price === null || product.price === undefined) {
+    throw createOrderError("item_price_missing");
+  }
+
+  if (!isValidPriceRub(product.price)) {
+    throw createOrderError("item_price_invalid");
+  }
+
+  let href = product.href ?? null;
+  let type = product.type ?? "product";
+
+  if (!href) {
+    const live = await findProductHref(code);
+    if (live) {
+      href = live.href;
+      type = live.type;
+    }
+  }
+
+  if (!href) {
+    throw createOrderError("item_not_found");
+  }
+
+  return {
+    href,
+    type,
+    trustedName: (product.name || code).trim(),
+    trustedPriceRub: product.price,
+    trustedDiscountExcluded: Boolean(product.discountExcluded ?? false),
+  };
+}
+
+async function resolveVolumeDiscountPercent(subtotalRub: number): Promise<number> {
+  if (!Number.isFinite(subtotalRub) || subtotalRub <= 0) {
+    return 0;
+  }
+
+  const discountTierQuery = strapi.db.query("api::discount-tier.discount-tier");
+  const tiers = await discountTierQuery.findMany({
+    select: ["minAmount", "percent"],
+    orderBy: { minAmount: "asc" },
+    limit: 1000,
+  });
+
+  let percent = 0;
+
+  for (const tier of tiers as Array<{ minAmount?: number | null; percent?: number | null }>) {
+    const minAmount = tier.minAmount ?? null;
+    const tierPercent = tier.percent ?? null;
+
+    if (!Number.isFinite(minAmount) || !Number.isFinite(tierPercent)) {
+      continue;
+    }
+
+    if ((minAmount as number) <= subtotalRub && (tierPercent as number) > percent) {
+      percent = Math.max(0, Math.trunc(tierPercent as number));
+    }
+  }
+
+  return percent;
 }
 
 async function createCounterparty(name: string, phone: string): Promise<string> {
@@ -157,4 +318,10 @@ async function createCustomerOrder(params: {
   return result;
 }
 
-export default { findProductHref, createCounterparty, createCustomerOrder };
+export default {
+  findProductHref,
+  resolveOrderItemByCode,
+  resolveVolumeDiscountPercent,
+  createCounterparty,
+  createCustomerOrder,
+};
