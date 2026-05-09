@@ -17,7 +17,8 @@
     "seed:spec-types": "node ./scripts/seed-specification-types.js",
     "seed:spec-templates": "node ./scripts/seed-specification-templates.js",
     "seed:category-spec-templates": "node ./scripts/seed-category-specification-templates.js",
-    "seed:product-spec-templates": "node ./scripts/seed-product-specification-templates.js"
+    "seed:product-spec-templates": "node ./scripts/seed-product-specification-templates.js",
+    "reset:spec-system": "node ./scripts/reset-specification-system.js"
   },
   "dependencies": {
     "@strapi/plugin-cloud": "5.36.0",
