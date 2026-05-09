@@ -13,11 +13,6 @@
     "value": {
       "type": "string",
       "required": true
-    },
-    "kategorii": {
-      "type": "relation",
-      "relation": "oneToOne",
-      "target": "api::moysklad-category.moysklad-category"
     }
   },
   "config": {}

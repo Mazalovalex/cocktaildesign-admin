@@ -127,11 +127,6 @@
     "isHiddenOnSite": {
       "type": "boolean",
       "default": false
-    },
-    "specificationTemplate": {
-      "type": "relation",
-      "relation": "manyToOne",
-      "target": "api::specification-template.specification-template"
     }
   }
 }

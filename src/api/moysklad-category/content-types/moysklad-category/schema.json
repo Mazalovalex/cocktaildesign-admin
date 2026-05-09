@@ -67,11 +67,6 @@
       "relation": "manyToOne",
       "target": "api::moysklad-category.moysklad-category",
       "inversedBy": "children"
-    },
-    "defaultSpecificationTemplate": {
-      "type": "relation",
-      "relation": "manyToOne",
-      "target": "api::specification-template.specification-template"
     }
   }
 }
