@@ -493,7 +493,7 @@ async function main() {
     if (!APPLY) {
       console.log('');
       console.log('Dry-run завершён. Записи в базу не было.');
-      console.log('Для локальной записи после проверки:');
+      console.log('Для записи после проверки на текущей базе:');
       console.log('APPLY=1 CSV_FILE=imports/tilda-kobbler.csv node scripts/import-tilda-kobbler-specs.js');
       return;
     }
@@ -514,8 +514,7 @@ async function main() {
         };
       });
 
-      await strapi.db.query(PRODUCT_UID).update({
-        where: { id: item.product.id },
+      await strapi.entityService.update(PRODUCT_UID, item.product.id, {
         data: {
           specifications,
         },
