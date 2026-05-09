@@ -13,7 +13,8 @@
     "start": "strapi start",
     "strapi": "strapi",
     "upgrade": "npx @strapi/upgrade latest",
-    "upgrade:dry": "npx @strapi/upgrade latest --dry"
+    "upgrade:dry": "npx @strapi/upgrade latest --dry",
+    "seed:spec-types": "node ./scripts/seed-specification-types.js"
   },
   "dependencies": {
     "@strapi/plugin-cloud": "5.36.0",
