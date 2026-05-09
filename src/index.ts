@@ -1,8 +1,9 @@
 // backend/src/index.ts
+import type { Core } from "@strapi/strapi";
 import cron from "node-cron";
 
 export default {
-  async bootstrap() {
+  async bootstrap({ strapi }: { strapi: Core.Strapi }) {
     // ✅ Одноразовая чистка старого поля stockUpdated из store
     if (process.env.MOYSKLAD_CLEAN_SYNC_STATE === "true") {
       const STORE = { type: "plugin", name: "moysklad", key: "syncState" } as const;
