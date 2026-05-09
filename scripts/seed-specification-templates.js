@@ -586,7 +586,7 @@ async function buildTemplateItems(items) {
     const specification = await getSpecificationByName(name);
 
     result.push({
-      specification: specification.id,
+      specification: specification.documentId || String(specification.id),
       isRequired,
       sortOrder: (index + 1) * 10,
     });
@@ -597,10 +597,14 @@ async function buildTemplateItems(items) {
 
 async function upsertTemplate(template) {
   const uid = 'api::specification-template.specification-template';
+  const documents = strapi.documents(uid);
 
-  const existing = await strapi.db.query(uid).findOne({
-    where: { name: template.name },
-    populate: ['items'],
+  const existing = await documents.findFirst({
+    filters: {
+      name: {
+        $eq: template.name,
+      },
+    },
   });
 
   const items = await buildTemplateItems(template.items);
@@ -615,8 +619,8 @@ async function upsertTemplate(template) {
   };
 
   if (existing) {
-    await strapi.db.query(uid).update({
-      where: { id: existing.id },
+    await documents.update({
+      documentId: existing.documentId,
       data,
     });
 
@@ -624,7 +628,7 @@ async function upsertTemplate(template) {
     return;
   }
 
-  await strapi.db.query(uid).create({ data });
+  await documents.create({ data });
   console.log(`Создано: ${template.name}`);
 }
 
