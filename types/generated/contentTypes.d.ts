@@ -650,16 +650,23 @@ export interface ApiMoyskladCategoryMoyskladCategory
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    defaultSpecificationTemplate: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::specification-template.specification-template'
+    >;
     href: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
     image: Schema.Attribute.Media<'images'>;
+    isHiddenInMenu: Schema.Attribute.Boolean &
+      Schema.Attribute.DefaultTo<false>;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
       'oneToMany',
       'api::moysklad-category.moysklad-category'
     > &
       Schema.Attribute.Private;
+    menuOrder: Schema.Attribute.Integer;
     moyskladId: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
@@ -717,6 +724,7 @@ export interface ApiMoyskladProductMoyskladProduct
       'api::moysklad-category.moysklad-category'
     >;
     code: Schema.Attribute.String;
+    composition: Schema.Attribute.Text;
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
@@ -730,6 +738,8 @@ export interface ApiMoyskladProductMoyskladProduct
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
     image: Schema.Attribute.Media<'images', true>;
+    isHiddenOnSite: Schema.Attribute.Boolean &
+      Schema.Attribute.DefaultTo<false>;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
       'oneToMany',
@@ -749,6 +759,10 @@ export interface ApiMoyskladProductMoyskladProduct
       Schema.Attribute.Unique;
     specifications: Schema.Attribute.Component<'product.harakteristika', true> &
       Schema.Attribute.Required;
+    specificationTemplate: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::specification-template.specification-template'
+    >;
     type: Schema.Attribute.Enumeration<['product', 'bundle']> &
       Schema.Attribute.Required &
       Schema.Attribute.DefaultTo<'product'>;
@@ -888,11 +902,50 @@ export interface ApiPromoCodePromoCode extends Struct.CollectionTypeSchema {
   };
 }
 
+export interface ApiSpecificationTemplateSpecificationTemplate
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'specification_templates';
+  info: {
+    displayName: '\u0428\u0430\u0431\u043B\u043E\u043D \u0445\u0430\u0440\u0430\u043A\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043A';
+    pluralName: 'specification-templates';
+    singularName: 'specification-template';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    code: Schema.Attribute.UID<'name'> & Schema.Attribute.Required;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    description: Schema.Attribute.Text;
+    isActive: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    items: Schema.Attribute.Component<
+      'product.specification-template-item',
+      true
+    >;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::specification-template.specification-template'
+    > &
+      Schema.Attribute.Private;
+    name: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Unique;
+    publishedAt: Schema.Attribute.DateTime;
+    sortOrder: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<100>;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiSpecificationTypeSpecificationType
   extends Struct.CollectionTypeSchema {
   collectionName: 'specification_types';
   info: {
-    displayName: 'Specification Type';
+    displayName: '\u0422\u0438\u043F \u0445\u0430\u0440\u0430\u043A\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043A\u0438';
     pluralName: 'specification-types';
     singularName: 'specification-type';
   };
@@ -903,6 +956,27 @@ export interface ApiSpecificationTypeSpecificationType
     createdAt: Schema.Attribute.DateTime;
     createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
+    exampleValue: Schema.Attribute.String;
+    group: Schema.Attribute.Enumeration<
+      [
+        'base',
+        'materials',
+        'sizes',
+        'construction',
+        'equipment',
+        'usage',
+        'storage',
+        'food',
+        'technical',
+        'category',
+      ]
+    > &
+      Schema.Attribute.DefaultTo<'base'>;
+    hint: Schema.Attribute.Text;
+    isActive: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    isFilterable: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    isVisible: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    label: Schema.Attribute.String;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
       'oneToMany',
@@ -913,6 +987,8 @@ export interface ApiSpecificationTypeSpecificationType
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
     publishedAt: Schema.Attribute.DateTime;
+    sortOrder: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<100>;
+    unit: Schema.Attribute.String;
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
@@ -1472,6 +1548,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
       'api::nastrojki-navigaczii.nastrojki-navigaczii': ApiNastrojkiNavigacziiNastrojkiNavigaczii;
       'api::promo-code.promo-code': ApiPromoCodePromoCode;
+      'api::specification-template.specification-template': ApiSpecificationTemplateSpecificationTemplate;
       'api::specification-type.specification-type': ApiSpecificationTypeSpecificationType;
       'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;
       'plugin::content-releases.release': PluginContentReleasesRelease;

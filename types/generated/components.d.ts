@@ -95,6 +95,23 @@ export interface ProductHarakteristika extends Struct.ComponentSchema {
   };
 }
 
+export interface ProductSpecificationTemplateItem
+  extends Struct.ComponentSchema {
+  collectionName: 'components_product_specification_template_items';
+  info: {
+    displayName: '\u041F\u0443\u043D\u043A\u0442 \u0448\u0430\u0431\u043B\u043E\u043D\u0430 \u0445\u0430\u0440\u0430\u043A\u0442\u0435\u0440\u0438\u0441\u0442\u0438\u043A\u0438';
+  };
+  attributes: {
+    isRequired: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<false>;
+    sortOrder: Schema.Attribute.Integer & Schema.Attribute.DefaultTo<100>;
+    specification: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::specification-type.specification-type'
+    > &
+      Schema.Attribute.Required;
+  };
+}
+
 declare module '@strapi/strapi' {
   export module Public {
     export interface ComponentSchemas {
@@ -105,6 +122,7 @@ declare module '@strapi/strapi' {
       'blocks.text-block': BlocksTextBlock;
       'navigation.category-link': NavigationCategoryLink;
       'product.harakteristika': ProductHarakteristika;
+      'product.specification-template-item': ProductSpecificationTemplateItem;
     }
   }
 }

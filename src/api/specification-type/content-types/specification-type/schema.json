@@ -4,7 +4,7 @@
   "info": {
     "singularName": "specification-type",
     "pluralName": "specification-types",
-    "displayName": "Specification Type"
+    "displayName": "Тип характеристики"
   },
   "options": {
     "draftAndPublish": false
@@ -15,6 +15,50 @@
       "type": "string",
       "required": true,
       "unique": true
+    },
+    "label": {
+      "type": "string"
+    },
+    "unit": {
+      "type": "string"
+    },
+    "group": {
+      "type": "enumeration",
+      "enum": [
+        "base",
+        "materials",
+        "sizes",
+        "construction",
+        "equipment",
+        "usage",
+        "storage",
+        "food",
+        "technical",
+        "category"
+      ],
+      "default": "base"
+    },
+    "hint": {
+      "type": "text"
+    },
+    "exampleValue": {
+      "type": "string"
+    },
+    "sortOrder": {
+      "type": "integer",
+      "default": 100
+    },
+    "isFilterable": {
+      "type": "boolean",
+      "default": false
+    },
+    "isVisible": {
+      "type": "boolean",
+      "default": true
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": true
     }
   }
 }

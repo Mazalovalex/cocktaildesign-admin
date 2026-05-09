@@ -76,7 +76,9 @@
     "image": {
       "type": "media",
       "multiple": true,
-      "allowedTypes": ["images"]
+      "allowedTypes": [
+        "images"
+      ]
     },
     "lockImages": {
       "type": "boolean",
@@ -95,7 +97,10 @@
       "type": "enumeration",
       "required": true,
       "default": "product",
-      "enum": ["product", "bundle"]
+      "enum": [
+        "product",
+        "bundle"
+      ]
     },
     "bundleComponentItems": {
       "type": "relation",
@@ -122,6 +127,11 @@
     "isHiddenOnSite": {
       "type": "boolean",
       "default": false
+    },
+    "specificationTemplate": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::specification-template.specification-template"
     }
   }
 }
