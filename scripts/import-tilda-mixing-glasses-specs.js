@@ -430,9 +430,7 @@ function normalizeSpecificationsForWrite(specifications) {
     }
 
     return {
-      specification: {
-        connect: [specificationId],
-      },
+      specification: specificationId,
       value: item.value,
     };
   });
