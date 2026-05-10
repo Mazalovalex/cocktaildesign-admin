@@ -415,6 +415,24 @@ function getSpecificationNameById(specificationsByName) {
   return namesById;
 }
 
+
+function normalizeSpecificationsForWrite(specifications) {
+  return (specifications ?? [])
+    .map((spec) => {
+      const specification =
+        spec.specification && typeof spec.specification === 'object'
+          ? spec.specification.id
+          : spec.specification;
+
+      return {
+        specification,
+        value: spec.value,
+        ...(spec.href ? { href: spec.href } : {}),
+      };
+    })
+    .filter((spec) => spec.specification && spec.value);
+}
+
 async function main() {
   const csvFile = process.env.CSV_FILE || DEFAULT_CSV_FILE;
   const csvPath = path.resolve(process.cwd(), csvFile);
@@ -564,7 +582,7 @@ async function main() {
           id: item.product.id,
         },
         data: {
-          specifications: item.specifications,
+          specifications: normalizeSpecificationsForWrite(item.specifications),
         },
       });
 
