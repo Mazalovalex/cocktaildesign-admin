@@ -416,22 +416,26 @@ function getSpecificationNameById(specificationsByName) {
 }
 
 
-function normalizeSpecificationsForWrite(specifications) {
-  return (specifications ?? [])
-    .map((spec) => {
-      const specification =
-        spec.specification && typeof spec.specification === 'object'
-          ? spec.specification.id
-          : spec.specification;
 
-      return {
-        specification,
-        value: spec.value,
-        ...(spec.href ? { href: spec.href } : {}),
-      };
-    })
-    .filter((spec) => spec.specification && spec.value);
+function normalizeSpecificationsForWrite(specifications) {
+  return specifications.map((item) => {
+    const specificationId =
+      item.specificationId ??
+      item.specification?.id ??
+      item.specification;
+
+    if (!specificationId || typeof specificationId === 'object') {
+      const label = item.specification?.name ?? item.label ?? item.value ?? 'без названия';
+      throw new Error(`Не удалось подготовить характеристику к записи: ${label}`);
+    }
+
+    return {
+      specification: specificationId,
+      value: item.value,
+    };
+  });
 }
+
 
 async function main() {
   const csvFile = process.env.CSV_FILE || DEFAULT_CSV_FILE;
