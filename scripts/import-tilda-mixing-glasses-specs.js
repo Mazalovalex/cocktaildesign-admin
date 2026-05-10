@@ -581,12 +581,9 @@ async function main() {
     let updatedCount = 0;
 
     for (const item of found) {
-      await strapi.db.query(PRODUCT_UID).update({
-        where: {
-          id: item.product.id,
-        },
+      await strapi.entityService.update(PRODUCT_UID, item.product.id, {
         data: {
-          specifications: normalizeSpecificationsForWrite(item.specifications),
+          specifications: item.specifications,
         },
       });
 
