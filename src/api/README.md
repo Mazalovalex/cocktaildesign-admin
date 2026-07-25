@@ -24,7 +24,7 @@ POST
 
 Header:
 
-    x-webhook-secret: super-secret-string
+    x-webhook-secret: <WEBHOOK_SECRET>
 
 ------------------------------------------------------------------------
 
@@ -32,7 +32,7 @@ Webhook endpoint:
 
 POST
 
-    /api/moysklad/webhook?secret=super-secret-string
+    /api/moysklad/webhook?secret=<WEBHOOK_SECRET>
 
 ------------------------------------------------------------------------
 
@@ -64,7 +64,7 @@ Sync status:
 
 # Проверка всей системы одной командой
 
-    BASE="http://localhost:1337"; SECRET="super-secret-string"; \
+    BASE="http://localhost:1337"; SECRET="<WEBHOOK_SECRET>"; \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
     echo "STRAPI HEALTH"; \
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
