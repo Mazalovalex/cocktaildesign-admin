@@ -856,10 +856,15 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        name: { $containsi: q },
-        category: { id: { $notIn: [14] } },
-        // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
-        ...VISIBLE_PRODUCTS_FILTER,
+        $and: [
+          {
+            $or: [{ name: { $containsi: q } }, { code: { $containsi: q } }],
+          },
+          {
+            category: { id: { $notIn: [14] } },
+          },
+          VISIBLE_PRODUCTS_FILTER,
+        ],
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
       populate: {
