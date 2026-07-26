@@ -842,6 +842,14 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
   /**
    * GET /api/catalog/search?q=шейкер
+   *
+   * Ищет по названию и артикулу родительского товара,
+   * а также по названию и артикулу его модификаторов.
+   *
+   * Если совпадение найдено именно у модификатора, в ответе возвращается
+   * matchedVariant. Фронтенд использует его цену, изображение и id,
+   * чтобы открыть страницу сразу с выбранной модификацией.
+   *
    * Скрытые товары (isHiddenOnSite = true) исключаются из выдачи.
    */
   async search(ctx) {
@@ -852,42 +860,100 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       return;
     }
 
+    const normalizedQuery = q.toLocaleLowerCase("ru");
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         $and: [
           {
-            $or: [{ name: { $containsi: q } }, { code: { $containsi: q } }],
+            $or: [
+              { name: { $containsi: q } },
+              { code: { $containsi: q } },
+              { variants: { name: { $containsi: q } } },
+              { variants: { code: { $containsi: q } } },
+            ],
           },
           {
-            category: { id: { $notIn: [14] } },
+            category: { id: { $notIn: [CATALOG_ROOT_PARENT_ID] } },
           },
           VISIBLE_PRODUCTS_FILTER,
         ],
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "code"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["name"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
       },
       orderBy: { id: "desc" },
       limit: 10,
     });
 
     ctx.body = {
-      items: rows.map((p) => ({
-        id: p.id,
-        attributes: {
-          name: p.name ?? null,
-          moyskladId: p.moyskladId ?? null,
-          slug: p.slug ?? null,
-          price: p.price ?? null,
-          priceOld: p.priceOld ?? null,
-          image: (p as any).image ?? null,
-          categoryName: (p as any).category?.name ?? null,
-        },
-      })),
+      items: rows.map((product) => {
+        const productName = product.name?.trim().toLocaleLowerCase("ru") ?? "";
+        const productCode = product.code?.trim().toLocaleLowerCase("ru") ?? "";
+
+        const productHasExactMatch = productName === normalizedQuery || productCode === normalizedQuery;
+        const productHasPartialMatch = productName.includes(normalizedQuery) || productCode.includes(normalizedQuery);
+
+        const variants = product.variants ?? [];
+
+        const exactVariant = variants.find((variant) => {
+          const variantName = variant.name?.trim().toLocaleLowerCase("ru") ?? "";
+          const variantCode = variant.code?.trim().toLocaleLowerCase("ru") ?? "";
+
+          return variantName === normalizedQuery || variantCode === normalizedQuery;
+        });
+
+        const partialVariant = variants.find((variant) => {
+          const variantName = variant.name?.trim().toLocaleLowerCase("ru") ?? "";
+          const variantCode = variant.code?.trim().toLocaleLowerCase("ru") ?? "";
+
+          return variantName.includes(normalizedQuery) || variantCode.includes(normalizedQuery);
+        });
+
+        let matchedVariant: VariantRow | null = null;
+
+        if (exactVariant) {
+          matchedVariant = exactVariant;
+        } else if (!productHasExactMatch && !productHasPartialMatch && partialVariant) {
+          matchedVariant = partialVariant;
+        }
+
+        return {
+          id: product.id,
+          attributes: {
+            name: product.name ?? null,
+            moyskladId: product.moyskladId ?? null,
+            slug: product.slug ?? null,
+            price: product.price ?? null,
+            priceOld: product.priceOld ?? null,
+            code: product.code ?? null,
+            image: product.image ?? null,
+            categoryName: product.category?.name ?? null,
+            matchedVariant: matchedVariant
+              ? {
+                  id: matchedVariant.id,
+                  name: matchedVariant.name ?? null,
+                  moyskladId: matchedVariant.moyskladId ?? null,
+                  price: matchedVariant.price ?? null,
+                  priceOld: matchedVariant.priceOld ?? null,
+                  code: matchedVariant.code ?? null,
+                  characteristics: matchedVariant.characteristics ?? null,
+                  image: matchedVariant.image ?? null,
+                }
+              : null,
+          },
+        };
+      }),
     };
   },
 
