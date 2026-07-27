@@ -210,13 +210,13 @@ function hasRealDiscount(item: {
 }
 
 function productHasRealDiscount(product: ProductRow): boolean {
-  if (hasRealDiscount(product)) {
-    return true;
+  const variants = product.variants ?? [];
+
+  if (variants.length > 0) {
+    return variants.some((variant) => hasRealDiscount(variant));
   }
 
-  return (product.variants ?? []).some((variant) =>
-    hasRealDiscount(variant),
-  );
+  return hasRealDiscount(product);
 }
 
 // ----------------------------------------------------------------------------
@@ -1098,6 +1098,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         title: collection.title ?? "",
         slug: collection.slug ?? "",
         description: collection.description ?? null,
+        selectionMode: collection.selectionMode ?? "manual",
       },
       items: paginatedRows.map((p) => ({
         id: p.id,
