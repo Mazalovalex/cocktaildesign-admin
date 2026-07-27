@@ -15,6 +15,10 @@ import {
   markSyncOk,
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
+import {
+  getWebsitePrices,
+  type MoySkladSalePrice,
+} from "../../../utils/moysklad-prices";
 
 import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
 
@@ -24,13 +28,6 @@ import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sy
 
 type MoySkladMeta = {
   href: string;
-};
-
-type MoySkladSalePrice = {
-  value: number; // копейки
-  priceType?: {
-    name: string;
-  };
 };
 
 // Общая форма для product и bundle — поля одинаковые
@@ -114,19 +111,6 @@ function pickIdFromHref(href?: string): string | null {
  */
 function makeStableSlug(moyskladId: string): string {
   return `ms-${moyskladId.slice(0, 8)}`;
-}
-
-/**
- * Цена из salePrices по точному имени типа цены.
- * MoySklad хранит value в копейках → возвращаем рубли.
- */
-function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
-  if (!prices?.length) return null;
-
-  const found = prices.find((p) => p.priceType?.name === name);
-  if (!found) return null;
-
-  return Math.round(found.value / 100);
 }
 
 /**
@@ -340,6 +324,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const nowIso = new Date().toISOString();
     const canWriteSlug = hasProductAttribute("slug");
+    const websitePrices = getWebsitePrices(entity.salePrices);
 
     const payload: Record<string, unknown> = {
       type: "product",
@@ -351,8 +336,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       code: entity.code ?? null,
       updated: entity.updated ?? null,
       category: category.id,
-      price: priceByName(entity.salePrices, "Цена с сайта"),
-      priceOld: priceByName(entity.salePrices, "Цена продажи"),
+      price: websitePrices.price,
+      priceOld: websitePrices.priceOld,
       uom: entity.uom?.name ?? null,
       weight: typeof entity.weight === "number" ? entity.weight : null,
       volume: typeof entity.volume === "number" ? entity.volume : null,
@@ -414,6 +399,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const nowIso = new Date().toISOString();
     const canWriteSlug = hasProductAttribute("slug");
+    const websitePrices = getWebsitePrices(entity.salePrices);
 
     const payload: Record<string, unknown> = {
       type: "bundle",
@@ -425,8 +411,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       code: entity.code ?? null,
       updated: entity.updated ?? null,
       category: category.id,
-      price: priceByName(entity.salePrices, "Цена с сайта"),
-      priceOld: priceByName(entity.salePrices, "Цена продажи"),
+      price: websitePrices.price,
+      priceOld: websitePrices.priceOld,
       uom: entity.uom?.name ?? null,
       weight: typeof entity.weight === "number" ? entity.weight : null,
       volume: typeof entity.volume === "number" ? entity.volume : null,
@@ -588,6 +574,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           categoryId,
           (directProductsByCategoryId.get(categoryId) ?? 0) + 1,
         );
+        const websitePrices = getWebsitePrices(p.salePrices);
 
         const payload: Record<string, unknown> = {
           type: "product",
@@ -599,8 +586,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           code: p.code ?? null,
           updated: p.updated ?? null,
           category: categoryId,
-          price: priceByName(p.salePrices, "Цена с сайта"),
-          priceOld: priceByName(p.salePrices, "Цена продажи"),
+          price: websitePrices.price,
+          priceOld: websitePrices.priceOld,
           uom: p.uom?.name ?? null,
           weight: typeof p.weight === "number" ? p.weight : null,
           volume: typeof p.volume === "number" ? p.volume : null,
@@ -640,6 +627,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           categoryId,
           (directBundlesByCategoryId.get(categoryId) ?? 0) + 1,
         );
+        const websitePrices = getWebsitePrices(b.salePrices);
 
         const payload: Record<string, unknown> = {
           type: "bundle",
@@ -651,8 +639,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           code: b.code ?? null,
           updated: b.updated ?? null,
           category: categoryId,
-          price: priceByName(b.salePrices, "Цена с сайта"),
-          priceOld: priceByName(b.salePrices, "Цена продажи"),
+          price: websitePrices.price,
+          priceOld: websitePrices.priceOld,
           uom: b.uom?.name ?? null,
           weight: typeof b.weight === "number" ? b.weight : null,
           volume: typeof b.volume === "number" ? b.volume : null,

@@ -3,13 +3,12 @@
  */
 
 import { factories } from "@strapi/strapi";
+import {
+  getWebsitePrices,
+  type MoySkladSalePrice,
+} from "../../../utils/moysklad-prices";
 
 type MoySkladMeta = { href?: string };
-
-type MoySkladSalePrice = {
-  value: number; // копейки
-  priceType?: { name: string };
-};
 
 type MoySkladCharacteristic = {
   name: string;
@@ -42,16 +41,6 @@ function pickIdFromHref(href?: string): string | null {
   const last = parts[parts.length - 1];
 
   return last ? last : null;
-}
-
-function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
-  if (!prices?.length) return null;
-
-  const found = prices.find((p) => p.priceType?.name === name);
-  if (!found) return null;
-
-  // рубли integer
-  return Math.round(found.value / 100);
 }
 
 export default factories.createCoreService("api::moysklad-variant.moysklad-variant", ({ strapi }) => ({
@@ -88,6 +77,7 @@ export default factories.createCoreService("api::moysklad-variant.moysklad-varia
       where: { moyskladId },
       select: ["id"],
     });
+    const websitePrices = getWebsitePrices(entity.salePrices);
 
     const payload = {
       name: entity.name ?? "",
@@ -99,8 +89,8 @@ export default factories.createCoreService("api::moysklad-variant.moysklad-varia
 
       characteristics: entity.characteristics ?? [],
 
-      price: priceByName(entity.salePrices, "Цена с сайта"),
-      priceOld: priceByName(entity.salePrices, "Цена продажи"),
+      price: websitePrices.price,
+      priceOld: websitePrices.priceOld,
 
       publishedAt: new Date().toISOString(),
     };

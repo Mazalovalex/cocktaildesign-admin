@@ -13,13 +13,12 @@
 // Надёжность сети:
 // - fetch в Node может падать по таймауту подключения (UND_ERR_CONNECT_TIMEOUT)
 // - добавлен retry + увеличенный timeout через AbortController
+import {
+  getWebsitePrices,
+  type MoySkladSalePrice,
+} from "../../../utils/moysklad-prices";
 
 type MoySkladMeta = { href: string };
-
-type MoySkladSalePrice = {
-  value: number; // копейки
-  priceType?: { name: string };
-};
 
 type MoySkladCharacteristic = {
   name: string;
@@ -68,20 +67,6 @@ function pickIdFromHref(href?: string): string | null {
   const last = parts[parts.length - 1];
 
   return last ? last : null;
-}
-
-/**
- * Цена из salePrices по точному имени типа цены.
- * MoySklad хранит value в копейках.
- */
-function priceByName(prices: MoySkladSalePrice[] | undefined, name: string): number | null {
-  if (!prices?.length) return null;
-
-  const found = prices.find((p) => p.priceType?.name === name);
-  if (!found) return null;
-
-  // Как и в товарах: кладём рубли integer
-  return Math.round(found.value / 100);
 }
 
 function isMoySkladVariantListResponse(data: unknown): data is MoySkladVariantListResponse {
@@ -217,6 +202,7 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
       where: { moyskladId: v.id },
       select: ["id"],
     });
+    const websitePrices = getWebsitePrices(v.salePrices);
 
     const payload = {
       name: v.name,
@@ -226,8 +212,8 @@ export async function syncAllVariants(): Promise<{ upserted: number; skippedNoPr
       updated: v.updated ?? null,
       product: product.id,
       characteristics: v.characteristics ?? [],
-      price: priceByName(v.salePrices, "Цена с сайта"),
-      priceOld: priceByName(v.salePrices, "Цена продажи"),
+      price: websitePrices.price,
+      priceOld: websitePrices.priceOld,
       publishedAt: new Date().toISOString(),
     };
 
