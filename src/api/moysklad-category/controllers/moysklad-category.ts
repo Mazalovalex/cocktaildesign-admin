@@ -199,6 +199,26 @@ function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
   }));
 }
 
+function hasRealDiscount(item: {
+  price?: number | null;
+  priceOld?: number | null;
+}): boolean {
+  const price = typeof item.price === "number" ? item.price : 0;
+  const priceOld = typeof item.priceOld === "number" ? item.priceOld : 0;
+
+  return price > 0 && priceOld > price;
+}
+
+function productHasRealDiscount(product: ProductRow): boolean {
+  if (hasRealDiscount(product)) {
+    return true;
+  }
+
+  return (product.variants ?? []).some((variant) =>
+    hasRealDiscount(variant),
+  );
+}
+
 // ----------------------------------------------------------------------------
 // getCollectionProducts
 // Вспомогательная функция — берёт товары коллекции по её selectionMode.
@@ -301,8 +321,6 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
   if (selectionMode === "discount") {
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        price: { $gt: 0 },
-        priceOld: { $gt: 0 },
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...VISIBLE_PRODUCTS_FILTER,
       },
@@ -321,12 +339,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       limit: 100000,
     });
 
-    // Фильтруем только реальные скидки (priceOld > price)
-    return rows.filter((p) => {
-      const price = typeof p.price === "number" ? p.price : 0;
-      const priceOld = typeof p.priceOld === "number" ? p.priceOld : 0;
-      return price > 0 && priceOld > price;
-    });
+    return rows.filter(productHasRealDiscount);
   }
 
   return [];
@@ -559,8 +572,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
-        price: { $gt: 0 },
-        priceOld: { $gt: 0 },
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...VISIBLE_PRODUCTS_FILTER,
       },
@@ -579,11 +590,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       limit: 100000,
     });
 
-    const discountedRows = rows.filter((product) => {
-      const price = typeof product.price === "number" ? product.price : 0;
-      const priceOld = typeof product.priceOld === "number" ? product.priceOld : 0;
-      return price > 0 && priceOld > price;
-    });
+    const discountedRows = rows.filter(productHasRealDiscount);
 
     const total = discountedRows.length;
     const paginatedRows = discountedRows.slice(offset, offset + limit);
