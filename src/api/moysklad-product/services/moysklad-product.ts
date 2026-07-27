@@ -19,8 +19,11 @@ import {
   getWebsitePrices,
   type MoySkladSalePrice,
 } from "../../../utils/moysklad-prices";
+import { isOwnProductionMoySkladProduct } from "../../../utils/moysklad-own-production";
 
 import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
+
+const OWN_PRODUCTION_COLLECTION_SLUG = "nashe-proizvodstvo";
 
 // ---------------------------------------------------------------------------
 // Типы MoySklad
@@ -51,6 +54,14 @@ type MoySkladProductOrBundle = {
 
   weight?: number | null;
   volume?: number | null;
+
+  supplier?: {
+    meta?: {
+      href?: string;
+    };
+  };
+  pathName?: string;
+  archived?: boolean;
 };
 
 // Webhook payload может приходить "не строгим" — подстраховываемся
@@ -70,6 +81,14 @@ type MoySkladWebhookProduct = {
 
   weight?: number | null;
   volume?: number | null;
+
+  supplier?: {
+    meta?: {
+      href?: string;
+    };
+  };
+  pathName?: string;
+  archived?: boolean;
 };
 
 type MoySkladListResponse = {
@@ -154,6 +173,147 @@ function hasCategoryAttribute(attrName: string): boolean {
 function hasProductAttribute(attrName: string): boolean {
   const ct = strapi.contentTypes["api::moysklad-product.moysklad-product"];
   return Boolean(ct?.attributes && Object.prototype.hasOwnProperty.call(ct.attributes, attrName));
+}
+
+/**
+ * Находит documentId опубликованной подборки «Наше производство».
+ */
+async function findOwnProductionCollectionDocumentId(): Promise<string | null> {
+  const collection = await strapi
+    .documents("api::catalog-collection.catalog-collection")
+    .findFirst({
+      filters: { slug: OWN_PRODUCTION_COLLECTION_SLUG },
+      status: "published",
+    });
+
+  if (!collection?.documentId) {
+    strapi.log.warn(
+      `[moysklad-product] own production collection not found: slug=${OWN_PRODUCTION_COLLECTION_SLUG}`,
+    );
+    return null;
+  }
+
+  return collection.documentId;
+}
+
+/**
+ * Полная замена relation products у подборки «Наше производство».
+ * Strapi 5 Document Service + set по documentId.
+ */
+async function replaceOwnProductionCollectionProducts(productDocumentIds: string[]) {
+  const collectionDocumentId = await findOwnProductionCollectionDocumentId();
+  if (!collectionDocumentId) {
+    return;
+  }
+
+  const data: Record<string, unknown> = {
+    products: {
+      set: productDocumentIds,
+    },
+  };
+
+  await strapi.documents("api::catalog-collection.catalog-collection").update({
+    documentId: collectionDocumentId,
+    data,
+    status: "published",
+  });
+
+  strapi.log.info(
+    `[moysklad-product] own production collection updated: products=${productDocumentIds.length}`,
+  );
+}
+
+async function addProductToOwnProductionCollection(productDocumentId: string) {
+  const collection = await strapi
+    .documents("api::catalog-collection.catalog-collection")
+    .findFirst({
+      filters: { slug: OWN_PRODUCTION_COLLECTION_SLUG },
+      status: "published",
+      populate: {
+        products: {
+          fields: ["documentId"],
+        },
+      },
+    });
+
+  if (!collection?.documentId) {
+    strapi.log.warn(
+      `[moysklad-product] own production collection not found: slug=${OWN_PRODUCTION_COLLECTION_SLUG}`,
+    );
+    return;
+  }
+
+  const products = (collection as { products?: Array<{ documentId?: string }> }).products ?? [];
+  const alreadyInCollection = products.some(
+    (product) => product.documentId === productDocumentId,
+  );
+
+  if (alreadyInCollection) {
+    return;
+  }
+
+  const data: Record<string, unknown> = {
+    products: {
+      connect: [productDocumentId],
+    },
+  };
+
+  await strapi.documents("api::catalog-collection.catalog-collection").update({
+    documentId: collection.documentId,
+    data,
+    status: "published",
+  });
+}
+
+async function removeProductFromOwnProductionCollection(productDocumentId: string) {
+  const collectionDocumentId = await findOwnProductionCollectionDocumentId();
+  if (!collectionDocumentId) {
+    return;
+  }
+
+  const data: Record<string, unknown> = {
+    products: {
+      disconnect: [productDocumentId],
+    },
+  };
+
+  await strapi.documents("api::catalog-collection.catalog-collection").update({
+    documentId: collectionDocumentId,
+    data,
+    status: "published",
+  });
+}
+
+async function removeProductFromOwnProductionCollectionByMoyskladId(moyskladId: string) {
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+  const product = await productQuery.findOne({
+    where: { moyskladId },
+    select: ["id", "documentId"],
+  });
+
+  const productDocumentId =
+    product && typeof (product as { documentId?: unknown }).documentId === "string"
+      ? (product as { documentId: string }).documentId
+      : null;
+
+  if (!productDocumentId) {
+    return;
+  }
+
+  await removeProductFromOwnProductionCollection(productDocumentId);
+}
+
+async function syncProductInOwnProductionCollection(
+  productDocumentId: string,
+  shouldBeInCollection: boolean,
+) {
+  if (shouldBeInCollection) {
+    await addProductToOwnProductionCollection(productDocumentId);
+    return;
+  }
+
+  await removeProductFromOwnProductionCollection(productDocumentId);
 }
 
 // ---------------------------------------------------------------------------
@@ -304,6 +464,8 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     const categoryMsId = pickIdFromHref(entity.productFolder?.meta?.href);
     if (!categoryMsId) {
       strapi.log.warn(`[moysklad-product] webhook skipped: no category for product=${moyskladId}`);
+      // Товар перенесли без папки / вне ожидаемой структуры — убираем из подборки.
+      await removeProductFromOwnProductionCollectionByMoyskladId(moyskladId);
       return;
     }
 
@@ -314,12 +476,14 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     if (!category) {
       strapi.log.warn(`[moysklad-product] webhook skipped: category not found msId=${categoryMsId}`);
+      // Папка вне витринного дерева — товар в Strapi не обновляем, но из подборки убираем.
+      await removeProductFromOwnProductionCollectionByMoyskladId(moyskladId);
       return;
     }
 
     const existing = await productQuery.findOne({
       where: { moyskladId },
-      select: ["id"],
+      select: ["id", "documentId"],
     });
 
     const nowIso = new Date().toISOString();
@@ -348,12 +512,33 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       payload.slug = makeStableSlug(moyskladId);
     }
 
+    let productDocumentId: string | null = null;
+
     if (existing) {
       await productQuery.update({ where: { id: existing.id }, data: payload });
+      productDocumentId =
+        typeof (existing as { documentId?: unknown }).documentId === "string"
+          ? (existing as { documentId: string }).documentId
+          : null;
       strapi.log.info(`[moysklad-product] updated: ${moyskladId}`);
     } else {
-      await productQuery.create({ data: payload });
+      const created = await productQuery.create({ data: payload });
+      productDocumentId =
+        typeof (created as { documentId?: unknown }).documentId === "string"
+          ? (created as { documentId: string }).documentId
+          : null;
       strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
+    }
+
+    if (productDocumentId) {
+      await syncProductInOwnProductionCollection(
+        productDocumentId,
+        isOwnProductionMoySkladProduct(entity),
+      );
+    } else {
+      strapi.log.warn(
+        `[moysklad-product] own production skip: no documentId for product=${moyskladId}`,
+      );
     }
 
     await recomputeCategoryCountsFromDb();
@@ -447,6 +632,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
    */
   async deleteOneFromWebhook(moyskladId: string) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    // Убираем из подборки до удаления записи (на случай если join не очистится сам).
+    await removeProductFromOwnProductionCollectionByMoyskladId(moyskladId);
 
     await productQuery.deleteMany({ where: { moyskladId } });
     strapi.log.info(`[moysklad-product] deleted: ${moyskladId}`);
@@ -553,6 +741,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       const keepMsIds = new Set<string>();       // витринные products
       const keepBundleMsIds = new Set<string>(); // витринные bundles
+      const ownProductionMsIds = new Set<string>(); // кандидаты в «Наше производство»
 
       const directProductsByCategoryId = new Map<number, number>();
       const directBundlesByCategoryId = new Map<number, number>();
@@ -560,6 +749,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       // --- 5) Upsert products ---
 
       for (const p of allProducts) {
+        if (isOwnProductionMoySkladProduct(p)) {
+          ownProductionMsIds.add(p.id);
+        }
+
         const categoryMsId = pickIdFromHref(p.productFolder?.meta?.href);
         if (!categoryMsId) continue;
         if (!allowedCategoryMsIds.has(categoryMsId)) continue;
@@ -674,11 +867,31 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         where: { type: "bundle", moyskladId: { $notIn: Array.from(keepBundleMsIds) } },
       });
 
-      // --- 8) Пересчёт productsCount по дереву категорий ---
+      // --- 8) Полная замена relation подборки «Наше производство» ---
+      // Берём только те кандидаты, которые реально есть в Strapi как type=product.
+      const ownProductionRows =
+        ownProductionMsIds.size === 0
+          ? []
+          : await productQuery.findMany({
+              where: {
+                type: "product",
+                moyskladId: { $in: Array.from(ownProductionMsIds) },
+              },
+              select: ["id", "documentId"],
+              limit: 100000,
+            });
+
+      const ownProductionDocumentIds = (ownProductionRows as Array<{ documentId?: string }>)
+        .map((row) => row.documentId)
+        .filter((documentId): documentId is string => typeof documentId === "string" && documentId.length > 0);
+
+      await replaceOwnProductionCollectionProducts(ownProductionDocumentIds);
+
+      // --- 9) Пересчёт productsCount по дереву категорий ---
 
       await recomputeCategoryCountsForTree(directProductsByCategoryId, directBundlesByCategoryId);
 
-      // --- 9) Синк состава для всех bundles ---
+      // --- 10) Синк состава для всех bundles ---
       // Важно: запускаем ПОСЛЕ upsert products, чтобы componentProduct уже существовали в БД.
 
       let bundleItemsCreatedTotal = 0;

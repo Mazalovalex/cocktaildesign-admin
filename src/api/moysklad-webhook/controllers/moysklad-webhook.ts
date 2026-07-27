@@ -106,10 +106,7 @@ async function processEvent(event: WebhookEvent) {
     }
 
     if (type === "product") {
-      await strapi.db.query("api::moysklad-product.moysklad-product").deleteMany({
-        where: { moyskladId },
-      });
-      strapi.log.info(`[moysklad-webhook] deleted product ${moyskladId}`);
+      await strapi.service("api::moysklad-product.moysklad-product").deleteOneFromWebhook(moyskladId);
       return;
     }
 
