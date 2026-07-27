@@ -1004,6 +1004,13 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["name"] },
+        variants: {
+          select: ["id"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
       },
       orderBy: { id: "asc" },
       limit: count,
@@ -1011,17 +1018,30 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     });
 
     ctx.body = {
-      items: rows.map((p) => ({
-        id: p.id,
-        attributes: {
-          name: p.name ?? null,
-          slug: p.slug ?? null,
-          price: p.price ?? null,
-          priceOld: p.priceOld ?? null,
-          image: (p as any).image ?? null,
-          categoryName: (p as any).category?.name ?? null,
-        },
-      })),
+      items: rows.map((p) => {
+        const parentImage = p.image ?? null;
+        const parentHasImages = Array.isArray(parentImage) && parentImage.length > 0;
+
+        const fallbackVariantWithImage = (p.variants ?? []).find(
+          (variant) => Array.isArray(variant.image) && variant.image.length > 0,
+        );
+
+        const randomProductImage = parentHasImages
+          ? parentImage
+          : (fallbackVariantWithImage?.image ?? null);
+
+        return {
+          id: p.id,
+          attributes: {
+            name: p.name ?? null,
+            slug: p.slug ?? null,
+            price: p.price ?? null,
+            priceOld: p.priceOld ?? null,
+            image: randomProductImage,
+            categoryName: (p as any).category?.name ?? null,
+          },
+        };
+      }),
     };
   },
 
