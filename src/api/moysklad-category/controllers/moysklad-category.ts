@@ -935,6 +935,15 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           matchedVariant = partialVariant;
         }
 
+        const parentImage = product.image ?? null;
+        const parentHasImages = Array.isArray(parentImage) && parentImage.length > 0;
+
+        const fallbackVariantWithImage = variants.find(
+          (variant) => Array.isArray(variant.image) && variant.image.length > 0,
+        );
+
+        const searchImage = parentHasImages ? parentImage : (fallbackVariantWithImage?.image ?? null);
+
         return {
           id: product.id,
           attributes: {
@@ -944,7 +953,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             price: product.price ?? null,
             priceOld: product.priceOld ?? null,
             code: product.code ?? null,
-            image: product.image ?? null,
+            image: searchImage,
             categoryName: product.category?.name ?? null,
             matchedVariant: matchedVariant
               ? {
