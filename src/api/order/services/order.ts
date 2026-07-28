@@ -225,8 +225,46 @@ async function createCounterparty(name: string, phone: string): Promise<string> 
       tags: ["клиенты интернет-магазинов", "cocktaildesign"],
     }),
   });
-  const data = (await res.json()) as { meta: { href: string } };
-  return data.meta.href;
+
+  if (!res.ok) {
+    strapi.log.error(`[MS createCounterparty] HTTP ${res.status}`);
+
+    throw new Error("moysklad_counterparty_http_error");
+  }
+
+  let data: unknown;
+
+  try {
+    data = await res.json();
+  } catch {
+    strapi.log.error("[MS createCounterparty] Invalid JSON response");
+
+    throw new Error("moysklad_counterparty_invalid_json");
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
+
+    throw new Error("moysklad_counterparty_invalid_response");
+  }
+
+  const meta = (data as { meta?: unknown }).meta;
+
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
+
+    throw new Error("moysklad_counterparty_invalid_response");
+  }
+
+  const href = (meta as { href?: unknown }).href;
+
+  if (typeof href !== "string" || !href.trim()) {
+    strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
+
+    throw new Error("moysklad_counterparty_invalid_response");
+  }
+
+  return href.trim();
 }
 
 async function createCustomerOrder(params: {
@@ -313,7 +351,49 @@ async function createCustomerOrder(params: {
     body: JSON.stringify(body),
   });
 
-  const result = (await res.json()) as { id: string; name: string };
+  if (!res.ok) {
+    strapi.log.error(`[MS createCustomerOrder] HTTP ${res.status}`);
+
+    throw new Error("moysklad_customer_order_http_error");
+  }
+
+  let data: unknown;
+
+  try {
+    data = await res.json();
+  } catch {
+    strapi.log.error("[MS createCustomerOrder] Invalid JSON response");
+
+    throw new Error("moysklad_customer_order_invalid_json");
+  }
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    strapi.log.error("[MS createCustomerOrder] Response does not contain valid id and name");
+
+    throw new Error("moysklad_customer_order_invalid_response");
+  }
+
+  const parsed = data as {
+    id?: unknown;
+    name?: unknown;
+  };
+
+  if (
+    typeof parsed.id !== "string" ||
+    !parsed.id.trim() ||
+    typeof parsed.name !== "string" ||
+    !parsed.name.trim()
+  ) {
+    strapi.log.error("[MS createCustomerOrder] Response does not contain valid id and name");
+
+    throw new Error("moysklad_customer_order_invalid_response");
+  }
+
+  const result = {
+    id: parsed.id.trim(),
+    name: parsed.name.trim(),
+  };
+
   strapi.log.info("[order] МойСклад ответ: " + JSON.stringify(result));
   return result;
 }
