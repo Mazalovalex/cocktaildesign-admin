@@ -1,5 +1,6 @@
 import type { Context } from "koa";
 import orderService from "../services/order";
+import type { PromoCodeResolveResult } from "../../promo-code/services/promo-code";
 
 type ValidationErrorCode =
   | "invalid_payload"
@@ -80,6 +81,114 @@ async function deleteOrderRequestSafely(orderRequestId: number) {
   } catch {
     strapi.log.warn("[order] Failed to delete order-request record after pre-order error");
   }
+}
+
+function normalizeDescriptionText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+type ResolvedPromoSuccess = Extract<PromoCodeResolveResult, { ok: true }>;
+
+function sendPromoValidationError(ctx: Context, promoResult: Extract<PromoCodeResolveResult, { ok: false }>) {
+  ctx.status = 400;
+
+  switch (promoResult.error) {
+    case "not_found":
+      ctx.body = { ok: false, error: "promo_not_found" };
+      return;
+    case "not_active":
+      ctx.body = { ok: false, error: "promo_not_active" };
+      return;
+    case "limit_reached":
+      ctx.body = { ok: false, error: "promo_limit_reached" };
+      return;
+    case "min_amount_not_reached":
+      ctx.body = {
+        ok: false,
+        error: "promo_min_amount_not_reached",
+        minAmount: promoResult.minAmount,
+      };
+      return;
+    case "invalid_promo_configuration":
+      ctx.body = { ok: false, error: "promo_invalid_configuration" };
+      return;
+    default:
+      ctx.body = { ok: false, error: "promo_invalid_configuration" };
+  }
+}
+
+function buildOrderDescriptionParts(params: {
+  buyerType: "individual" | "legal";
+  engravingItems: string[];
+  telegram?: string;
+  inn?: string;
+  comment?: string;
+  trustedVolumeDiscountPercent: number;
+  discountPlan: ReturnType<typeof orderService.resolveOrderDiscountPlan>;
+  resolvedPromo: ResolvedPromoSuccess | null;
+}): string[] {
+  const {
+    buyerType,
+    engravingItems,
+    telegram,
+    inn,
+    comment,
+    trustedVolumeDiscountPercent,
+    discountPlan,
+    resolvedPromo,
+  } = params;
+
+  const parts: string[] = [
+    buyerType === "legal" ? "Юрлицо" : "Физлицо",
+    engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
+    telegram ? `Telegram: ${telegram}` : null,
+    inn ? `ИНН: ${inn}` : null,
+    comment ? `Комментарий: ${comment}` : null,
+  ].filter((part): part is string => part !== null);
+
+  if (discountPlan.appliedVolumeDiscountAmount > 0) {
+    parts.push(
+      `Скидка за объём: ${trustedVolumeDiscountPercent}% (${discountPlan.appliedVolumeDiscountAmount} ₽)`,
+    );
+  }
+
+  if (resolvedPromo) {
+    if (resolvedPromo.discountType === "fixed") {
+      parts.push(`Промокод ${resolvedPromo.code}: ${discountPlan.appliedPromoDiscountAmount} ₽`);
+    } else if (resolvedPromo.discountType === "percent") {
+      if (discountPlan.promoWinsAgainstVolume) {
+        parts.push(
+          `Промокод ${resolvedPromo.code}: ${resolvedPromo.discountValue}% (${discountPlan.appliedPromoDiscountAmount} ₽)`,
+        );
+      } else {
+        parts.push(`Промокод ${resolvedPromo.code} не применён: объёмная скидка выгоднее`);
+      }
+    } else if (resolvedPromo.discountType === "startup") {
+      if (discountPlan.promoWinsAgainstVolume) {
+        parts.push(
+          `Акция СТАРТАП ${resolvedPromo.code}: ${resolvedPromo.discountValue}% (${discountPlan.appliedPromoDiscountAmount} ₽)`,
+        );
+      } else {
+        parts.push(`Акция СТАРТАП ${resolvedPromo.code} не применена: объёмная скидка выгоднее`);
+      }
+      parts.push("Новый клиент — проверить вручную");
+      if (resolvedPromo.bonusMessage.trim() !== "") {
+        parts.push(`Бонусы: ${normalizeDescriptionText(resolvedPromo.bonusMessage)}`);
+      }
+    } else if (resolvedPromo.discountType === "inventory") {
+      parts.push(`Промокод ${resolvedPromo.code}: подарок`);
+      if (resolvedPromo.giftDescription && resolvedPromo.giftDescription.trim() !== "") {
+        parts.push(`Подарок: ${normalizeDescriptionText(resolvedPromo.giftDescription)}`);
+      }
+      if (resolvedPromo.bonusMessage.trim() !== "") {
+        parts.push(`Условия: ${normalizeDescriptionText(resolvedPromo.bonusMessage)}`);
+      }
+    }
+  }
+
+  parts.push(`Итого после скидок: ${discountPlan.finalPrice} ₽`);
+
+  return parts;
 }
 
 function sanitizeOrderPayload(body: unknown): {
@@ -264,6 +373,17 @@ export default {
       return;
     }
 
+    const idempotencyKey = getIdempotencyKey(ctx);
+    if (!idempotencyKey) {
+      sendValidationError(ctx, "invalid_idempotency_key");
+      return;
+    }
+
+    const existingBeforeCreate = await findOrderRequestByKey(idempotencyKey);
+    if (existingBeforeCreate && sendExistingOrderRequest(ctx, existingBeforeCreate)) {
+      return;
+    }
+
     const positions: {
       productHref: string;
       productType: string;
@@ -275,6 +395,7 @@ export default {
     }[] = [];
 
     let trustedSubtotal = 0;
+    let trustedDiscountableSubtotal = 0;
 
     for (const item of items) {
       try {
@@ -290,7 +411,13 @@ export default {
           name: resolved.trustedName,
         });
 
-        trustedSubtotal += resolved.trustedPriceRub * item.quantity;
+        const lineTotal = resolved.trustedPriceRub * item.quantity;
+
+        trustedSubtotal += lineTotal;
+
+        if (!resolved.trustedDiscountExcluded) {
+          trustedDiscountableSubtotal += lineTotal;
+        }
       } catch (error) {
         const errorCode = (error as { code?: string })?.code;
         if (
@@ -314,30 +441,70 @@ export default {
 
     const trustedVolumeDiscountPercent = await orderService.resolveVolumeDiscountPercent(trustedSubtotal);
 
+    const promoCodeService = strapi.service("api::promo-code.promo-code") as {
+      resolvePromoCode(
+        rawCode: string,
+        totalPrice: number,
+        discountableTotal: number,
+      ): Promise<PromoCodeResolveResult>;
+    };
+
+    let resolvedPromo: ResolvedPromoSuccess | null = null;
+
+    if (promoCode) {
+      const promoResult = await promoCodeService.resolvePromoCode(
+        promoCode,
+        trustedSubtotal,
+        trustedDiscountableSubtotal,
+      );
+
+      if (promoResult.ok === false) {
+        sendPromoValidationError(ctx, promoResult);
+        return;
+      }
+
+      resolvedPromo = promoResult;
+    }
+
+    const promoForDiscountPlan =
+      resolvedPromo !== null
+        ? {
+            discountType: resolvedPromo.discountType,
+            discountValue: resolvedPromo.discountValue,
+            discountAmount: resolvedPromo.discountAmount,
+          }
+        : null;
+
+    const discountPlan = orderService.resolveOrderDiscountPlan({
+      totalPrice: trustedSubtotal,
+      discountableTotal: trustedDiscountableSubtotal,
+      volumeDiscountPercent: trustedVolumeDiscountPercent,
+      promo: promoForDiscountPlan,
+    });
+
     const engravingItems = positions.filter((i) => i.engraving).map((i) => i.name);
 
-    const descriptionParts = [
-      buyerType === "legal" ? "Юрлицо" : "Физлицо",
-      engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
-      telegram ? `Telegram: ${telegram}` : null,
-      inn ? `ИНН: ${inn}` : null,
-      trustedVolumeDiscountPercent > 0 ? `Скидка за объём ${trustedVolumeDiscountPercent}%` : null,
-      promoCode ? `Промокод: ${promoCode}` : null,
-      comment ? `Комментарий: ${comment}` : null,
-    ].filter(Boolean);
+    const description = buildOrderDescriptionParts({
+      buyerType,
+      engravingItems,
+      telegram,
+      inn,
+      comment,
+      trustedVolumeDiscountPercent,
+      discountPlan,
+      resolvedPromo,
+    }).join(" | ");
 
-    const description = descriptionParts.join(" | ");
-
-    const idempotencyKey = getIdempotencyKey(ctx);
-    if (!idempotencyKey) {
-      sendValidationError(ctx, "invalid_idempotency_key");
-      return;
-    }
-
-    const existingBeforeCreate = await findOrderRequestByKey(idempotencyKey);
-    if (existingBeforeCreate && sendExistingOrderRequest(ctx, existingBeforeCreate)) {
-      return;
-    }
+    const orderPositions = positions.map((position) => ({
+      productHref: position.productHref,
+      productType: position.productType,
+      quantity: position.quantity,
+      price: position.price,
+      engraving: position.engraving,
+      discountPercent: position.discountExcluded
+        ? discountPlan.excludedPositionPercent
+        : discountPlan.discountablePositionPercent,
+    }));
 
     let orderRequestId: number | null = null;
     let orderCreationStarted = false;
@@ -364,10 +531,9 @@ export default {
 
       const order = await orderService.createCustomerOrder({
         agentHref,
-        positions,
+        positions: orderPositions,
         description,
         shipmentAddress: address,
-        volumeDiscountPercent: trustedVolumeDiscountPercent,
       });
 
       const orderId = typeof order.id === "string" ? order.id.trim() : "";

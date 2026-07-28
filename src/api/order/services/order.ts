@@ -15,6 +15,127 @@ type ResolvedOrderItem = {
   trustedDiscountExcluded: boolean;
 };
 
+type OrderPromoDiscount = {
+  discountType: "percent" | "fixed" | "inventory" | "startup";
+  discountValue: number;
+  discountAmount: number;
+};
+
+type OrderDiscountPlan = {
+  volumeDiscountPercent: number;
+  volumeDiscountAmount: number;
+  appliedVolumeDiscountAmount: number;
+  appliedPromoDiscountAmount: number;
+  totalDiscountAmount: number;
+  finalPrice: number;
+  discountablePositionPercent: number;
+  excludedPositionPercent: number;
+  promoWinsAgainstVolume: boolean;
+};
+
+function normalizeDiscountPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  const clamped = Math.max(0, Math.min(100, value));
+
+  return Math.round(clamped * 10_000) / 10_000;
+}
+
+function resolveOrderDiscountPlan(params: {
+  totalPrice: number;
+  discountableTotal: number;
+  volumeDiscountPercent: number;
+  promo: OrderPromoDiscount | null;
+}): OrderDiscountPlan {
+  const totalPrice = Number.isFinite(params.totalPrice) ? Math.max(0, params.totalPrice) : 0;
+
+  const discountableTotal = Number.isFinite(params.discountableTotal)
+    ? Math.max(0, Math.min(params.discountableTotal, totalPrice))
+    : 0;
+
+  const volumeDiscountPercent = normalizeDiscountPercent(params.volumeDiscountPercent);
+
+  const volumeDiscountAmount = Math.round((discountableTotal * volumeDiscountPercent) / 100);
+
+  const noPromoPlan: OrderDiscountPlan = {
+    volumeDiscountPercent,
+    volumeDiscountAmount,
+    appliedVolumeDiscountAmount: volumeDiscountAmount,
+    appliedPromoDiscountAmount: 0,
+    totalDiscountAmount: volumeDiscountAmount,
+    finalPrice: Math.max(0, totalPrice - volumeDiscountAmount),
+    discountablePositionPercent: volumeDiscountPercent,
+    excludedPositionPercent: 0,
+    promoWinsAgainstVolume: false,
+  };
+
+  if (params.promo === null || params.promo.discountType === "inventory") {
+    return noPromoPlan;
+  }
+
+  const promo = params.promo;
+
+  if (promo.discountType === "percent" || promo.discountType === "startup") {
+    const promoDiscountAmount = Math.max(0, Math.min(promo.discountAmount, totalPrice));
+
+    if (promoDiscountAmount >= volumeDiscountAmount) {
+      return {
+        volumeDiscountPercent,
+        volumeDiscountAmount,
+        appliedVolumeDiscountAmount: 0,
+        appliedPromoDiscountAmount: promoDiscountAmount,
+        totalDiscountAmount: promoDiscountAmount,
+        finalPrice: Math.max(0, totalPrice - promoDiscountAmount),
+        discountablePositionPercent: normalizeDiscountPercent(promo.discountValue),
+        excludedPositionPercent: 0,
+        promoWinsAgainstVolume: true,
+      };
+    }
+
+    return {
+      volumeDiscountPercent,
+      volumeDiscountAmount,
+      appliedVolumeDiscountAmount: volumeDiscountAmount,
+      appliedPromoDiscountAmount: 0,
+      totalDiscountAmount: volumeDiscountAmount,
+      finalPrice: Math.max(0, totalPrice - volumeDiscountAmount),
+      discountablePositionPercent: volumeDiscountPercent,
+      excludedPositionPercent: 0,
+      promoWinsAgainstVolume: false,
+    };
+  }
+
+  if (promo.discountType === "fixed") {
+    const remainingAfterVolume = Math.max(0, totalPrice - volumeDiscountAmount);
+
+    const appliedFixedAmount = Math.min(Math.max(0, promo.discountAmount), remainingAfterVolume);
+
+    const fixedPercentOnRemaining =
+      remainingAfterVolume > 0 ? (appliedFixedAmount / remainingAfterVolume) * 100 : 0;
+
+    const combinedDiscountablePercent =
+      100 - ((100 - volumeDiscountPercent) * (100 - fixedPercentOnRemaining)) / 100;
+
+    const totalDiscountAmount = Math.min(totalPrice, volumeDiscountAmount + appliedFixedAmount);
+
+    return {
+      volumeDiscountPercent,
+      volumeDiscountAmount,
+      appliedVolumeDiscountAmount: volumeDiscountAmount,
+      appliedPromoDiscountAmount: appliedFixedAmount,
+      totalDiscountAmount,
+      finalPrice: Math.max(0, totalPrice - volumeDiscountAmount - appliedFixedAmount),
+      discountablePositionPercent: normalizeDiscountPercent(combinedDiscountablePercent),
+      excludedPositionPercent: normalizeDiscountPercent(fixedPercentOnRemaining),
+      promoWinsAgainstVolume: false,
+    };
+  }
+
+  return noPromoPlan;
+}
+
 function msHeaders() {
   return {
     Authorization: `Bearer ${process.env.MOYSKLAD_ACCESS_TOKEN}`,
@@ -332,11 +453,10 @@ async function createCustomerOrder(params: {
     quantity: number;
     price: number;
     engraving: boolean;
-    discountExcluded: boolean;
+    discountPercent: number;
   }[];
   description: string;
   shipmentAddress: string;
-  volumeDiscountPercent?: number;
 }): Promise<{ id: string; name: string }> {
   const body = {
     organization: {
@@ -388,8 +508,7 @@ async function createCustomerOrder(params: {
     positions: params.positions.map((p) => ({
       quantity: p.quantity,
       price: p.price * 100,
-      // Скидка за объём применяется только если товар НЕ исключён из скидок
-      discount: p.discountExcluded ? 0 : (params.volumeDiscountPercent ?? 0),
+      discount: normalizeDiscountPercent(p.discountPercent),
       vat: 0,
       vatEnabled: false,
       assortment: {
@@ -470,6 +589,7 @@ export default {
   findProductHref,
   resolveOrderItemByCode,
   resolveVolumeDiscountPercent,
+  resolveOrderDiscountPlan,
   createCounterparty,
   createCustomerOrder,
 };
