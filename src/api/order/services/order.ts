@@ -1,4 +1,5 @@
 const MS_BASE = "https://api.moysklad.ru/api/remap/1.2";
+const MS_REQUEST_TIMEOUT_MS = 15_000;
 
 type OrderErrorCode =
   | "invalid_item_code"
@@ -22,6 +23,25 @@ function msHeaders() {
   };
 }
 
+function createMoyskladRequestTimeout() {
+  const controller = new AbortController();
+
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, MS_REQUEST_TIMEOUT_MS);
+
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timeoutId);
+    },
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function createOrderError(code: OrderErrorCode): Error & { code: OrderErrorCode } {
   const error = new Error(code) as Error & { code: OrderErrorCode };
   error.code = code;
@@ -42,43 +62,52 @@ async function findProductHref(code: string): Promise<{ href: string; type: stri
   const filter = encodeURIComponent(`code=${code}`);
   const url = `${MS_BASE}/entity/assortment?filter=${filter}&limit=10`;
 
-  const res = await fetch(url, { headers: msHeaders() });
+  const requestTimeout = createMoyskladRequestTimeout();
 
-  if (!res.ok) {
-    strapi.log.error(`[MS findProductHref] HTTP ${res.status} для code=${code}`);
+  try {
+    const res = await fetch(url, {
+      headers: msHeaders(),
+      signal: requestTimeout.signal,
+    });
+
+    if (!res.ok) {
+      strapi.log.error(`[MS findProductHref] HTTP ${res.status} для code=${code}`);
+      return null;
+    }
+
+    const data = (await res.json()) as {
+      rows: {
+        code?: string;
+        article?: string;
+        name?: string;
+        meta: { href: string; type: string };
+      }[];
+    };
+
+    const rows = data.rows ?? [];
+
+    // Точное совпадение по code
+    const exact = rows.find((r) => r.code === code);
+    if (exact) {
+      return { href: exact.meta.href, type: exact.meta.type };
+    }
+
+    // Fallback: вдруг артикул в поле article, а не code
+    const byArticle = rows.find((r) => r.article === code);
+    if (byArticle) {
+      strapi.log.warn(`[MS findProductHref] ${code} найден по article, а не по code`);
+      return { href: byArticle.meta.href, type: byArticle.meta.type };
+    }
+
+    strapi.log.warn(
+      `[MS findProductHref] Нет точного совпадения для "${code}". ` +
+        `МС вернул ${rows.length} строк. Первые 3: ` +
+        JSON.stringify(rows.slice(0, 3).map((r) => ({ code: r.code, article: r.article, name: r.name }))),
+    );
     return null;
+  } finally {
+    requestTimeout.clear();
   }
-
-  const data = (await res.json()) as {
-    rows: {
-      code?: string;
-      article?: string;
-      name?: string;
-      meta: { href: string; type: string };
-    }[];
-  };
-
-  const rows = data.rows ?? [];
-
-  // Точное совпадение по code
-  const exact = rows.find((r) => r.code === code);
-  if (exact) {
-    return { href: exact.meta.href, type: exact.meta.type };
-  }
-
-  // Fallback: вдруг артикул в поле article, а не code
-  const byArticle = rows.find((r) => r.article === code);
-  if (byArticle) {
-    strapi.log.warn(`[MS findProductHref] ${code} найден по article, а не по code`);
-    return { href: byArticle.meta.href, type: byArticle.meta.type };
-  }
-
-  strapi.log.warn(
-    `[MS findProductHref] Нет точного совпадения для "${code}". ` +
-      `МС вернул ${rows.length} строк. Первые 3: ` +
-      JSON.stringify(rows.slice(0, 3).map((r) => ({ code: r.code, article: r.article, name: r.name }))),
-  );
-  return null;
 }
 
 async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderItem> {
@@ -215,56 +244,67 @@ async function resolveVolumeDiscountPercent(subtotalRub: number): Promise<number
 }
 
 async function createCounterparty(name: string, phone: string): Promise<string> {
-  const res = await fetch(`${MS_BASE}/entity/counterparty`, {
-    method: "POST",
-    headers: msHeaders(),
-    body: JSON.stringify({
-      name,
-      phone,
-      companyType: "individual",
-      tags: ["клиенты интернет-магазинов", "cocktaildesign"],
-    }),
-  });
-
-  if (!res.ok) {
-    strapi.log.error(`[MS createCounterparty] HTTP ${res.status}`);
-
-    throw new Error("moysklad_counterparty_http_error");
-  }
-
-  let data: unknown;
+  const requestTimeout = createMoyskladRequestTimeout();
 
   try {
-    data = await res.json();
-  } catch {
-    strapi.log.error("[MS createCounterparty] Invalid JSON response");
+    const res = await fetch(`${MS_BASE}/entity/counterparty`, {
+      method: "POST",
+      headers: msHeaders(),
+      signal: requestTimeout.signal,
+      body: JSON.stringify({
+        name,
+        phone,
+        companyType: "individual",
+        tags: ["клиенты интернет-магазинов", "cocktaildesign"],
+      }),
+    });
 
-    throw new Error("moysklad_counterparty_invalid_json");
+    if (!res.ok) {
+      strapi.log.error(`[MS createCounterparty] HTTP ${res.status}`);
+
+      throw new Error("moysklad_counterparty_http_error");
+    }
+
+    let data: unknown;
+
+    try {
+      data = await res.json();
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+
+      strapi.log.error("[MS createCounterparty] Invalid JSON response");
+
+      throw new Error("moysklad_counterparty_invalid_json");
+    }
+
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
+
+      throw new Error("moysklad_counterparty_invalid_response");
+    }
+
+    const meta = (data as { meta?: unknown }).meta;
+
+    if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+      strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
+
+      throw new Error("moysklad_counterparty_invalid_response");
+    }
+
+    const href = (meta as { href?: unknown }).href;
+
+    if (typeof href !== "string" || !href.trim()) {
+      strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
+
+      throw new Error("moysklad_counterparty_invalid_response");
+    }
+
+    return href.trim();
+  } finally {
+    requestTimeout.clear();
   }
-
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
-
-    throw new Error("moysklad_counterparty_invalid_response");
-  }
-
-  const meta = (data as { meta?: unknown }).meta;
-
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
-
-    throw new Error("moysklad_counterparty_invalid_response");
-  }
-
-  const href = (meta as { href?: unknown }).href;
-
-  if (typeof href !== "string" || !href.trim()) {
-    strapi.log.error("[MS createCounterparty] Response does not contain meta.href");
-
-    throw new Error("moysklad_counterparty_invalid_response");
-  }
-
-  return href.trim();
 }
 
 async function createCustomerOrder(params: {
@@ -345,57 +385,68 @@ async function createCustomerOrder(params: {
     })),
   };
 
-  const res = await fetch(`${MS_BASE}/entity/customerorder`, {
-    method: "POST",
-    headers: msHeaders(),
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    strapi.log.error(`[MS createCustomerOrder] HTTP ${res.status}`);
-
-    throw new Error("moysklad_customer_order_http_error");
-  }
-
-  let data: unknown;
+  const requestTimeout = createMoyskladRequestTimeout();
 
   try {
-    data = await res.json();
-  } catch {
-    strapi.log.error("[MS createCustomerOrder] Invalid JSON response");
+    const res = await fetch(`${MS_BASE}/entity/customerorder`, {
+      method: "POST",
+      headers: msHeaders(),
+      signal: requestTimeout.signal,
+      body: JSON.stringify(body),
+    });
 
-    throw new Error("moysklad_customer_order_invalid_json");
+    if (!res.ok) {
+      strapi.log.error(`[MS createCustomerOrder] HTTP ${res.status}`);
+
+      throw new Error("moysklad_customer_order_http_error");
+    }
+
+    let data: unknown;
+
+    try {
+      data = await res.json();
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+
+      strapi.log.error("[MS createCustomerOrder] Invalid JSON response");
+
+      throw new Error("moysklad_customer_order_invalid_json");
+    }
+
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      strapi.log.error("[MS createCustomerOrder] Response does not contain valid id and name");
+
+      throw new Error("moysklad_customer_order_invalid_response");
+    }
+
+    const parsed = data as {
+      id?: unknown;
+      name?: unknown;
+    };
+
+    if (
+      typeof parsed.id !== "string" ||
+      !parsed.id.trim() ||
+      typeof parsed.name !== "string" ||
+      !parsed.name.trim()
+    ) {
+      strapi.log.error("[MS createCustomerOrder] Response does not contain valid id and name");
+
+      throw new Error("moysklad_customer_order_invalid_response");
+    }
+
+    const result = {
+      id: parsed.id.trim(),
+      name: parsed.name.trim(),
+    };
+
+    strapi.log.info("[order] МойСклад ответ: " + JSON.stringify(result));
+    return result;
+  } finally {
+    requestTimeout.clear();
   }
-
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    strapi.log.error("[MS createCustomerOrder] Response does not contain valid id and name");
-
-    throw new Error("moysklad_customer_order_invalid_response");
-  }
-
-  const parsed = data as {
-    id?: unknown;
-    name?: unknown;
-  };
-
-  if (
-    typeof parsed.id !== "string" ||
-    !parsed.id.trim() ||
-    typeof parsed.name !== "string" ||
-    !parsed.name.trim()
-  ) {
-    strapi.log.error("[MS createCustomerOrder] Response does not contain valid id and name");
-
-    throw new Error("moysklad_customer_order_invalid_response");
-  }
-
-  const result = {
-    id: parsed.id.trim(),
-    name: parsed.name.trim(),
-  };
-
-  strapi.log.info("[order] МойСклад ответ: " + JSON.stringify(result));
-  return result;
 }
 
 export default {
