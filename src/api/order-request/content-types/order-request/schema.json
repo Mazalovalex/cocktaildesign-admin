@@ -14,7 +14,11 @@
       "type": "string",
       "required": true,
       "unique": true,
-      "private": true
+      "private": true,
+      "column": {
+        "unique": true,
+        "notNullable": true
+      }
     },
     "status": {
       "type": "enumeration",
