@@ -858,14 +858,24 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       // --- 7) Удаляем то, чего больше нет в MoySklad/витрине ---
       // Важно: удаляем раздельно по type, чтобы products и bundles не затирали друг друга.
+      // Пустой keepMsIds → не вызываем $notIn: [] (риск массового удаления всех товаров).
+      if (keepMsIds.size === 0) {
+        throw new Error(
+          "MoySklad product sync aborted: keepMsIds is empty, destructive cleanup skipped",
+        );
+      }
 
       await productQuery.deleteMany({
         where: { type: "product", moyskladId: { $notIn: Array.from(keepMsIds) } },
       });
 
-      await productQuery.deleteMany({
-        where: { type: "bundle", moyskladId: { $notIn: Array.from(keepBundleMsIds) } },
-      });
+      if (keepBundleMsIds.size > 0) {
+        await productQuery.deleteMany({
+          where: { type: "bundle", moyskladId: { $notIn: Array.from(keepBundleMsIds) } },
+        });
+      } else {
+        strapi.log.warn("[moysklad-product] Bundle cleanup skipped: keepBundleMsIds is empty");
+      }
 
       // --- 8) Полная замена relation подборки «Наше производство» ---
       // Берём только те кандидаты, которые реально есть в Strapi как type=product.
