@@ -1,5 +1,6 @@
 //backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
+import { getStorefrontVisibleProductFilter } from "../../../utils/storefront-product-visibility";
 import syncServiceFactory from "../services/sync";
 
 function isSyncLockError(err: unknown): boolean {
@@ -96,20 +97,6 @@ type BreadcrumbCategory = {
 };
 
 const CATALOG_ROOT_PARENT_ID = 14;
-
-// ----------------------------------------------------------------------------
-// VISIBLE_PRODUCTS_FILTER
-//
-// Фильтр для скрытия товаров с сайта.
-// Менеджер ставит флаг isHiddenOnSite = true в Strapi → товар не показывается.
-// Если флаг false ИЛИ null — товар показывается (по умолчанию все видимы).
-//
-// Используется во всех endpoint'ах товаров: products, productsDiscounted,
-// productsByIds, productBySlug, search, randomProducts, getCollectionProducts.
-// ----------------------------------------------------------------------------
-const VISIBLE_PRODUCTS_FILTER = {
-  $or: [{ isHiddenOnSite: false }, { isHiddenOnSite: { $null: true } }],
-};
 
 function buildCategoryChain(params: { startId: number; all: CategoryRowLite[] }): BreadcrumbCategory[] {
   const { startId, all } = params;
@@ -254,7 +241,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       where: {
         id: { $in: productIds },
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
-        ...VISIBLE_PRODUCTS_FILTER,
+        ...getStorefrontVisibleProductFilter(),
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -299,7 +286,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       where: {
         category: { id: { $in: categoryIds } },
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
-        ...VISIBLE_PRODUCTS_FILTER,
+        ...getStorefrontVisibleProductFilter(),
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -322,7 +309,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
-        ...VISIBLE_PRODUCTS_FILTER,
+        ...getStorefrontVisibleProductFilter(),
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -512,7 +499,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     // Фильтр: товары нужной категории + не скрытые менеджером
     const where = {
       category: { id: { $in: categoryIds } },
-      ...VISIBLE_PRODUCTS_FILTER,
+      ...getStorefrontVisibleProductFilter(),
     };
 
     const total = await productQuery.count({ where });
@@ -573,7 +560,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
-        ...VISIBLE_PRODUCTS_FILTER,
+        ...getStorefrontVisibleProductFilter(),
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -639,7 +626,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       where: {
         id: { $in: ids },
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
-        ...VISIBLE_PRODUCTS_FILTER,
+        ...getStorefrontVisibleProductFilter(),
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
       populate: {
@@ -703,7 +690,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         slug,
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         // Если товар скрыт — findOne вернёт null → 404 ниже
-        ...VISIBLE_PRODUCTS_FILTER,
+        ...getStorefrontVisibleProductFilter(),
       },
       select: [
         "id",
@@ -884,7 +871,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           {
             category: { id: { $notIn: [CATALOG_ROOT_PARENT_ID] } },
           },
-          VISIBLE_PRODUCTS_FILTER,
+          getStorefrontVisibleProductFilter(),
         ],
       },
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "code"],
@@ -985,7 +972,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     // Фильтр: не корневая категория + не скрытые товары
     const where = {
       category: { id: { $notIn: [14] } },
-      ...VISIBLE_PRODUCTS_FILTER,
+      ...getStorefrontVisibleProductFilter(),
     };
 
     const total = await productQuery.count({ where });

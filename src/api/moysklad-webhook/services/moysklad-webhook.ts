@@ -39,6 +39,7 @@ async function deleteLocalByWebhookType(type: string, moyskladId: string): Promi
     await strapi.db.query("api::moysklad-product.moysklad-product").deleteMany({
       where: { moyskladId, type: "bundle" },
     });
+    await strapi.service("api::moysklad-product.moysklad-product").recomputeCategoryCounts();
     strapi.log.info(`[moysklad-webhook] deleted bundle ${moyskladId}`);
     return;
   }
@@ -47,6 +48,7 @@ async function deleteLocalByWebhookType(type: string, moyskladId: string): Promi
     await strapi.db.query("api::moysklad-category.moysklad-category").deleteMany({
       where: { moyskladId },
     });
+    await strapi.service("api::moysklad-product.moysklad-product").recomputeCategoryCounts();
     strapi.log.info(`[moysklad-webhook] deleted productfolder ${moyskladId}`);
     return;
   }
@@ -125,6 +127,7 @@ export default () => ({
 
     if (type === "productfolder") {
       await strapi.service("api::moysklad-category.moysklad-category").syncOneFromWebhook(entity);
+      await strapi.service("api::moysklad-product.moysklad-product").recomputeCategoryCounts();
       strapi.log.info(`[moysklad-webhook] ok: ${type} ${action ?? ""}`);
       return;
     }

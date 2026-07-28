@@ -21,6 +21,7 @@ import {
   type MoySkladSalePrice,
 } from "../../../utils/moysklad-prices";
 import { isOwnProductionMoySkladProduct } from "../../../utils/moysklad-own-production";
+import { getStorefrontVisibleProductFilter } from "../../../utils/storefront-product-visibility";
 
 import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
 
@@ -419,8 +420,13 @@ async function recomputeCategoryCountsFromDb() {
   const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
   const rows = await productQuery.findMany({
+    where: getStorefrontVisibleProductFilter(),
     select: ["type"],
-    populate: { category: { select: ["id"] } },
+    populate: {
+      category: {
+        select: ["id"],
+      },
+    },
     limit: 200000,
   });
 
@@ -446,6 +452,10 @@ async function recomputeCategoryCountsFromDb() {
 // ---------------------------------------------------------------------------
 
 export default factories.createCoreService("api::moysklad-product.moysklad-product", ({ strapi }) => ({
+  async recomputeCategoryCounts() {
+    await recomputeCategoryCountsFromDb();
+  },
+
   /**
    * Webhook: upsert одного product.
    * type всегда "product", bundle через syncOneBundleFromWebhook.
@@ -766,9 +776,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       const keepBundleMsIds = new Set<string>(); // витринные bundles
       const ownProductionMsIds = new Set<string>(); // кандидаты в «Наше производство»
 
-      const directProductsByCategoryId = new Map<number, number>();
-      const directBundlesByCategoryId = new Map<number, number>();
-
       // --- 5) Upsert products ---
 
       for (const p of allProducts) {
@@ -785,11 +792,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
         keepMsIds.add(p.id);
 
-        // Считаем для пересчёта счётчиков категорий
-        directProductsByCategoryId.set(
-          categoryId,
-          (directProductsByCategoryId.get(categoryId) ?? 0) + 1,
-        );
         const websitePrices = getWebsitePrices(p.salePrices);
 
         const payload: Record<string, unknown> = {
@@ -839,10 +841,6 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         bundlesAllowed += 1;
         keepBundleMsIds.add(b.id);
 
-        directBundlesByCategoryId.set(
-          categoryId,
-          (directBundlesByCategoryId.get(categoryId) ?? 0) + 1,
-        );
         const websitePrices = getWebsitePrices(b.salePrices);
 
         const payload: Record<string, unknown> = {
@@ -938,7 +936,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       // --- 9) Пересчёт productsCount по дереву категорий ---
 
-      await recomputeCategoryCountsForTree(directProductsByCategoryId, directBundlesByCategoryId);
+      await recomputeCategoryCountsFromDb();
 
       // --- 10) Синк состава для всех bundles ---
       // Важно: запускаем ПОСЛЕ upsert products, чтобы componentProduct уже существовали в БД.

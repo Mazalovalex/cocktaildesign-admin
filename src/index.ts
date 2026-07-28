@@ -1,16 +1,98 @@
 import type { Core } from "@strapi/strapi";
 import cron from "node-cron";
 import {
+  enqueueMoySkladMutation,
   recoverMoySkladWebhookQueueAfterRestart,
   scheduleMoySkladWebhookDrain,
   stopMoySkladWebhookQueue,
 } from "./utils/moysklad-mutation-queue";
 import { resetMoySkladSyncLockAfterRestart } from "./utils/moysklad-sync-state";
 
+const PRODUCT_UID = "api::moysklad-product.moysklad-product";
+const CATEGORY_UID = "api::moysklad-category.moysklad-category";
+
+type DocumentMiddlewareContextLike = {
+  uid?: unknown;
+  action?: unknown;
+  params?: unknown;
+};
+
+function getDocumentMiddlewareData(params: unknown): Record<string, unknown> {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return {};
+  }
+
+  const data = (params as { data?: unknown }).data;
+
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return {};
+  }
+
+  return data as Record<string, unknown>;
+}
+
+function shouldRecomputeCategoryCountsAfterAdminChange(context: DocumentMiddlewareContextLike): boolean {
+  const uid = typeof context.uid === "string" ? context.uid : "";
+  const action = typeof context.action === "string" ? context.action : "";
+  const data = getDocumentMiddlewareData(context.params);
+
+  if (uid === PRODUCT_UID) {
+    if (action === "create" || action === "delete") {
+      return true;
+    }
+
+    if (action === "update") {
+      return (
+        Object.prototype.hasOwnProperty.call(data, "isHiddenOnSite") ||
+        Object.prototype.hasOwnProperty.call(data, "category") ||
+        Object.prototype.hasOwnProperty.call(data, "type")
+      );
+    }
+
+    return false;
+  }
+
+  if (uid === CATEGORY_UID) {
+    if (action === "create" || action === "delete") {
+      return true;
+    }
+
+    if (action === "update") {
+      return Object.prototype.hasOwnProperty.call(data, "parent");
+    }
+
+    return false;
+  }
+
+  return false;
+}
+
 let moySkladCronTask: ReturnType<typeof cron.schedule> | null = null;
 let fullSyncRunning = false;
 
 export default {
+  register({ strapi }: { strapi: Core.Strapi }) {
+    strapi.documents.use(async (context, next) => {
+      if (!shouldRecomputeCategoryCountsAfterAdminChange(context)) {
+        return next();
+      }
+
+      const result = await next();
+
+      try {
+        await enqueueMoySkladMutation("products", async () => {
+          await strapi.service("api::moysklad-product.moysklad-product").recomputeCategoryCounts();
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        strapi.log.error(`[catalog-counts] admin recount failed: ${message}`);
+      }
+
+      return result;
+    });
+  },
+
   async bootstrap({ strapi }: { strapi: Core.Strapi }) {
     // Одноразовая чистка старого поля stockUpdated из store
     if (process.env.MOYSKLAD_CLEAN_SYNC_STATE === "true") {

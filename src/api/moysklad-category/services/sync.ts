@@ -225,6 +225,8 @@ const syncServiceFactory = () => {
         where: { moyskladId: { $notIn: Array.from(keepIds) } },
       });
 
+      await strapi.service("api::moysklad-product.moysklad-product").recomputeCategoryCounts();
+
       const result = { ok: true, total: filtered.length, root: rootPath };
 
       await markSyncOk("categories", { categories: filtered.length });
