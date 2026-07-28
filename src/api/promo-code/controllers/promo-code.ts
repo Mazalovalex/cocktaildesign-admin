@@ -1,9 +1,12 @@
 // backend/src/api/promo-code/controllers/promo-code.ts
 import { factories } from "@strapi/strapi";
 
+import type { PromoCodeResolveResult } from "../services/promo-code";
+
 type PromoCodeApplyBody = {
   code?: string;
   totalPrice?: number;
+  discountableTotal?: number;
 };
 
 const MAX_PROMO_CODE_LENGTH = 128;
@@ -13,15 +16,21 @@ function isValidTotalPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_TOTAL_PRICE;
 }
 
+function isValidDiscountableTotal(value: unknown, totalPrice: number): value is number {
+  return (
+    typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_TOTAL_PRICE && value <= totalPrice
+  );
+}
+
 export default factories.createCoreController("api::promo-code.promo-code", ({ strapi }) => ({
   /**
    * POST /api/promo-code/apply
-   * Body: { code: string, totalPrice: number }
+   * Body: { code: string, totalPrice: number, discountableTotal?: number }
    *
-   * Важно:
-   * Этот endpoint только проверяет промокод и считает preview-скидку для frontend.
-   * Он НЕ увеличивает usageCount.
-   * Фактическое использование промокода должно фиксироваться при успешном создании заказа.
+   * Этот endpoint только проверяет промокод
+   * и рассчитывает preview-скидку для frontend.
+   *
+   * usageCount здесь не увеличивается.
    */
   async apply(ctx) {
     const body = ctx.request.body as PromoCodeApplyBody;
@@ -31,90 +40,85 @@ export default factories.createCoreController("api::promo-code.promo-code", ({ s
       .toUpperCase();
 
     const totalPrice = Number(body.totalPrice ?? 0);
+    const discountableTotal = Number(body.discountableTotal ?? body.totalPrice ?? 0);
 
     if (!code) {
       ctx.status = 400;
-      ctx.body = { ok: false, error: "code_required" };
+      ctx.body = {
+        ok: false,
+        error: "code_required",
+      };
       return;
     }
 
     if (code.length > MAX_PROMO_CODE_LENGTH) {
       ctx.status = 400;
-      ctx.body = { ok: false, error: "code_invalid" };
+      ctx.body = {
+        ok: false,
+        error: "code_invalid",
+      };
       return;
     }
 
     if (!isValidTotalPrice(totalPrice)) {
       ctx.status = 400;
-      ctx.body = { ok: false, error: "total_price_invalid" };
-      return;
-    }
-
-    const promoQuery = strapi.db.query("api::promo-code.promo-code");
-
-    const promo = await promoQuery.findOne({
-      where: { code },
-    });
-
-    if (!promo) {
-      ctx.status = 404;
-      ctx.body = { ok: false, error: "not_found" };
-      return;
-    }
-
-    if (!promo.isActive) {
-      ctx.status = 400;
-      ctx.body = { ok: false, error: "not_active" };
-      return;
-    }
-
-    // usageLimit = null означает безлимитный промокод.
-    // apply только проверяет лимит, но не увеличивает usageCount.
-    if (promo.usageLimit !== null && promo.usageCount >= promo.usageLimit) {
-      ctx.status = 400;
-      ctx.body = { ok: false, error: "limit_reached" };
-      return;
-    }
-
-    if (promo.minOrderAmount && totalPrice < promo.minOrderAmount) {
-      ctx.status = 400;
-      ctx.body = { ok: false, error: "min_amount_not_reached", minAmount: promo.minOrderAmount };
-      return;
-    }
-
-    if (promo.discountType === "inventory") {
       ctx.body = {
-        ok: true,
-        discountType: "inventory",
-        discountAmount: 0,
-        finalPrice: totalPrice,
-        bonusMessage: promo.bonusMessage || "Для вас подарок! Менеджер свяжется с вами для уточнения деталей",
-        giftDescription: promo.giftDescription,
+        ok: false,
+        error: "total_price_invalid",
       };
       return;
     }
 
-    let discountAmount = 0;
-    let replacesVolumeDiscount = false;
-
-    if (promo.discountType === "percent" || promo.discountType === "startup") {
-      discountAmount = Math.round((totalPrice * promo.discountValue) / 100);
-      replacesVolumeDiscount = true;
-    } else if (promo.discountType === "fixed") {
-      discountAmount = promo.discountValue;
-      replacesVolumeDiscount = false;
+    if (!isValidDiscountableTotal(discountableTotal, totalPrice)) {
+      ctx.status = 400;
+      ctx.body = {
+        ok: false,
+        error: "discountable_total_invalid",
+      };
+      return;
     }
 
-    discountAmount = Math.min(discountAmount, totalPrice);
+    const promoCodeService = strapi.service("api::promo-code.promo-code") as {
+      resolvePromoCode(rawCode: string, totalPrice: number, discountableTotal: number): Promise<PromoCodeResolveResult>;
+    };
+
+    const result = await promoCodeService.resolvePromoCode(code, totalPrice, discountableTotal);
+
+    if (result.ok === false) {
+      if (result.error === "not_found") {
+        ctx.status = 404;
+      } else {
+        ctx.status = 400;
+      }
+
+      ctx.body = {
+        ok: false,
+        error: result.error,
+        ...(result.error === "min_amount_not_reached" ? { minAmount: result.minAmount } : {}),
+      };
+      return;
+    }
+
+    if (result.discountType === "inventory") {
+      ctx.body = {
+        ok: true,
+        discountType: result.discountType,
+        discountAmount: result.discountAmount,
+        finalPrice: result.finalPrice,
+        bonusMessage: result.bonusMessage,
+        giftDescription: result.giftDescription,
+      };
+      return;
+    }
 
     ctx.body = {
       ok: true,
-      discountType: promo.discountType,
-      discountValue: promo.discountValue,
-      discountAmount,
-      finalPrice: totalPrice - discountAmount,
-      replacesVolumeDiscount,
-      bonusMessage: promo.bonusMessage || "",
+      discountType: result.discountType,
+      discountValue: result.discountValue,
+      discountAmount: result.discountAmount,
+      finalPrice: result.finalPrice,
+      replacesVolumeDiscount: result.replacesVolumeDiscount,
+      bonusMessage: result.bonusMessage,
     };
   },
 }));
