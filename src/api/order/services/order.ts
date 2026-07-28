@@ -442,7 +442,7 @@ async function createCustomerOrder(params: {
       name: parsed.name.trim(),
     };
 
-    strapi.log.info("[order] МойСклад ответ: " + JSON.stringify(result));
+    strapi.log.info(`[order] Заказ МойСклад создан: ${result.name}`);
     return result;
   } finally {
     requestTimeout.clear();
