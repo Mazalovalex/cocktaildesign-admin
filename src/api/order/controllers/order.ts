@@ -356,6 +356,41 @@ async function acquireOrderRequestRecord(idempotencyKey: string): Promise<
   }
 }
 
+async function finalizeSuccessfulOrder(params: {
+  orderRequestId: number;
+  orderId: string;
+  orderName: string;
+  promoId: number | null;
+}) {
+  await strapi.db.transaction(async ({ trx }) => {
+    const updatedOrderRequestRows = await trx("order_requests")
+      .where({ id: params.orderRequestId })
+      .update({
+        status: "succeeded",
+        order_id: params.orderId,
+        order_name: params.orderName,
+        updated_at: new Date(),
+      });
+
+    if (updatedOrderRequestRows !== 1) {
+      throw new Error("order_request_finalize_failed");
+    }
+
+    if (params.promoId !== null) {
+      const updatedPromoRows = await trx("promo_codes")
+        .where({ id: params.promoId })
+        .update({
+          usage_count: trx.raw("COALESCE(usage_count, 0) + 1"),
+          updated_at: new Date(),
+        });
+
+      if (updatedPromoRows !== 1) {
+        throw new Error("promo_usage_increment_failed");
+      }
+    }
+  });
+}
+
 export default {
   async create(ctx: Context) {
     const sanitizedPayload = sanitizeOrderPayload(ctx.request.body);
@@ -543,15 +578,11 @@ export default {
         throw new Error("invalid_moysklad_order_response");
       }
 
-      const orderRequestQuery = strapi.db.query("api::order-request.order-request");
-
-      await orderRequestQuery.update({
-        where: { id: orderRequestId },
-        data: {
-          status: "succeeded",
-          orderId,
-          orderName,
-        },
+      await finalizeSuccessfulOrder({
+        orderRequestId,
+        orderId,
+        orderName,
+        promoId: resolvedPromo !== null ? resolvedPromo.promoId : null,
       });
 
       ctx.body = { ok: true, orderId, orderName };
