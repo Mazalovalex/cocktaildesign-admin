@@ -18,6 +18,7 @@ import {
   markSyncOk,
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
+import { enqueueMoySkladFullSync } from "../../../utils/moysklad-mutation-queue";
 
 /** Упрощённый тип meta из MoySklad (нам нужен href и служебные поля). */
 type MoySkladMeta = { href: string; type: string; mediaType?: string };
@@ -108,8 +109,8 @@ function makeStableSlug(moyskladId: string): string {
  * Важно: выносим фабрику в константу.
  * Так TS/Strapi гарантированно видят модуль (ESM), и не будет TS2306.
  */
-const syncServiceFactory = () => ({
-  async syncAll() {
+const syncServiceFactory = () => {
+  async function syncAllUnlocked() {
     // 1) Lock: не даём запустить синк параллельно (важно для целостности БД)
     await acquireMoySkladSyncLock("categories");
 
@@ -235,7 +236,13 @@ const syncServiceFactory = () => ({
     } finally {
       await releaseMoySkladSyncLock("categories");
     }
-  },
-});
+  }
+
+  return {
+    async syncAll() {
+      return enqueueMoySkladFullSync("categories", syncAllUnlocked);
+    },
+  };
+};
 
 export default syncServiceFactory;

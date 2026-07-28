@@ -2,7 +2,7 @@
 
 type MoySkladSyncStatus = "idle" | "running" | "ok" | "error";
 
-export type MoySkladSyncKind = "categories" | "products" | "webhook";
+export type MoySkladSyncKind = "categories" | "products" | "variants" | "webhook";
 
 type MoySkladSyncLock = {
   isLocked: boolean;
@@ -143,5 +143,22 @@ export async function markSyncError(kind: MoySkladSyncKind, err: unknown) {
     lastErrorAt: now,
     lastRunKind: kind,
     lastErrorMessage: message,
+  });
+}
+
+export async function resetMoySkladSyncLockAfterRestart() {
+  const state = await getMoySkladSyncState();
+
+  if (!state.lock.isLocked) {
+    return state;
+  }
+
+  const now = new Date().toISOString();
+
+  return setMoySkladSyncState({
+    status: "error",
+    lastErrorAt: now,
+    lastErrorMessage: "Previous MoySklad sync was interrupted by process restart",
+    lock: { isLocked: false, lockedAt: null, lockedBy: null },
   });
 }

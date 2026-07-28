@@ -1,7 +1,14 @@
 import type { Core } from "@strapi/strapi";
 import cron from "node-cron";
+import {
+  recoverMoySkladWebhookQueueAfterRestart,
+  scheduleMoySkladWebhookDrain,
+  stopMoySkladWebhookQueue,
+} from "./utils/moysklad-mutation-queue";
+import { resetMoySkladSyncLockAfterRestart } from "./utils/moysklad-sync-state";
 
 let moySkladCronTask: ReturnType<typeof cron.schedule> | null = null;
+let fullSyncRunning = false;
 
 export default {
   async bootstrap({ strapi }: { strapi: Core.Strapi }) {
@@ -38,6 +45,10 @@ export default {
       return;
     }
 
+    await resetMoySkladSyncLockAfterRestart();
+    await recoverMoySkladWebhookQueueAfterRestart();
+    scheduleMoySkladWebhookDrain();
+
     const secret = process.env.MOYSKLAD_WEBHOOK_SECRET;
     const apiBase = process.env.STRAPI_SELF_URL ?? "http://127.0.0.1:1337";
 
@@ -66,6 +77,13 @@ export default {
     }
 
     async function runFullSync(): Promise<void> {
+      if (fullSyncRunning) {
+        strapi.log.warn("[moysklad-cron] Previous full sync is still running");
+        return;
+      }
+
+      fullSyncRunning = true;
+
       strapi.log.info("[moysklad-cron] ▶ Запуск автосинка");
 
       try {
@@ -81,6 +99,8 @@ export default {
         strapi.log.info("[moysklad-cron] ✅ Автосинк завершён");
       } catch (error) {
         strapi.log.error(`[moysklad-cron] ❌ Ошибка: ${String(error)}`);
+      } finally {
+        fullSyncRunning = false;
       }
     }
 
@@ -99,6 +119,8 @@ export default {
   },
 
   async destroy({ strapi }: { strapi: Core.Strapi }) {
+    stopMoySkladWebhookQueue();
+
     if (!moySkladCronTask) {
       return;
     }

@@ -15,6 +15,7 @@ import {
   markSyncOk,
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
+import { enqueueMoySkladFullSync } from "../../../utils/moysklad-mutation-queue";
 import {
   getWebsitePrices,
   type MoySkladSalePrice,
@@ -632,6 +633,25 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
    */
   async deleteOneFromWebhook(moyskladId: string) {
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+    const variantQuery = strapi.db.query("api::moysklad-variant.moysklad-variant");
+
+    const existingProduct = await productQuery.findOne({
+      where: {
+        moyskladId,
+        type: "product",
+      },
+      select: ["id"],
+    });
+
+    if (existingProduct) {
+      await variantQuery.deleteMany({
+        where: {
+          product: {
+            id: existingProduct.id,
+          },
+        },
+      });
+    }
 
     // Убираем из подборки до удаления записи (на случай если join не очистится сам).
     await removeProductFromOwnProductionCollectionByMoyskladId(moyskladId);
@@ -658,7 +678,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
    * - Перед циклом upsert делаем ОДИН findMany → Map<moyskladId, strapiId>.
    * - В цикле lookup за O(1) вместо запроса в БД на каждый товар.
    */
-  async syncAll() {
+  async syncAllUnlocked() {
     await acquireMoySkladSyncLock("products");
     await markSyncRunning("products");
 
@@ -668,6 +688,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
       const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+      const variantQuery = strapi.db.query("api::moysklad-variant.moysklad-variant");
 
       const canWriteSlug = hasProductAttribute("slug");
 
@@ -726,13 +747,15 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       // При 1000 товарах = 1 запрос вместо 1000.
 
       const existingRows = await productQuery.findMany({
-        select: ["id", "moyskladId"],
+        select: ["id", "moyskladId", "type"],
         limit: 200000,
       });
 
+      type ExistingProductRow = { id: number; moyskladId: string; type?: string };
+
       // Map: moyskladId → Strapi numeric id
       const existingIdByMsId = new Map<string, number>(
-        (existingRows as Array<{ id: number; moyskladId: string }>)
+        (existingRows as ExistingProductRow[])
           .filter((r) => r.moyskladId)
           .map((r) => [r.moyskladId, r.id]),
       );
@@ -865,6 +888,22 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         );
       }
 
+      const staleProductIds = (existingRows as ExistingProductRow[])
+        .filter((row) => row.type === "product" && !keepMsIds.has(row.moyskladId))
+        .map((row) => row.id);
+
+      if (staleProductIds.length > 0) {
+        await variantQuery.deleteMany({
+          where: {
+            product: {
+              id: {
+                $in: staleProductIds,
+              },
+            },
+          },
+        });
+      }
+
       await productQuery.deleteMany({
         where: { type: "product", moyskladId: { $notIn: Array.from(keepMsIds) } },
       });
@@ -941,5 +980,9 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     } finally {
       await releaseMoySkladSyncLock("products");
     }
+  },
+
+  async syncAll() {
+    return enqueueMoySkladFullSync("products", () => this.syncAllUnlocked());
   },
 }));

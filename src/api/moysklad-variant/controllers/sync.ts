@@ -2,6 +2,14 @@
 
 import { syncAllVariants } from "../services/sync";
 
+function isSyncLockError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.message.startsWith('Sync lock is already acquired by "');
+}
+
 export default {
   /**
    * POST /api/moysklad/sync/variants
@@ -43,6 +51,15 @@ export default {
         ...result,
       };
     } catch (err) {
+      if (isSyncLockError(err)) {
+        ctx.status = 409;
+        ctx.body = {
+          ok: false,
+          error: "sync_already_running",
+        };
+        return;
+      }
+
       const e = err as {
         message?: string;
         stack?: string;

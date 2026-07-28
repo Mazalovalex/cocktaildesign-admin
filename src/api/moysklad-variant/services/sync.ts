@@ -17,6 +17,14 @@ import {
   getWebsitePrices,
   type MoySkladSalePrice,
 } from "../../../utils/moysklad-prices";
+import {
+  acquireMoySkladSyncLock,
+  releaseMoySkladSyncLock,
+  markSyncError,
+  markSyncOk,
+  markSyncRunning,
+} from "../../../utils/moysklad-sync-state";
+import { enqueueMoySkladFullSync } from "../../../utils/moysklad-mutation-queue";
 
 type MoySkladMeta = { href: string };
 
@@ -149,87 +157,109 @@ async function fetchVariantJson(url: string, token: string): Promise<MoySkladVar
 }
 
 /**
- * Синк ВСЕХ variants.
+ * Синк ВСЕХ variants (без очереди — вызывать только через syncAllVariants).
  * Предусловие: товары уже синкнуты, иначе не найдём product в Strapi.
  */
+async function syncAllVariantsUnlocked(): Promise<{ upserted: number; skippedNoProduct: number }> {
+  await acquireMoySkladSyncLock("variants");
+  await markSyncRunning("variants");
+
+  try {
+    const token = process.env.MOYSKLAD_ACCESS_TOKEN;
+    if (!token) throw new Error("MOYSKLAD_ACCESS_TOKEN is not set");
+
+    const variantQuery = strapi.db.query("api::moysklad-variant.moysklad-variant");
+    const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+    const keepVariantMsIds = new Set<string>();
+
+    // 1) Забираем всё из MoySklad (пагинация)
+    const all: MoySkladVariant[] = [];
+    let offset = 0;
+
+    while (true) {
+      const url = `https://api.moysklad.ru/api/remap/1.2/entity/variant?limit=100&offset=${offset}`;
+      const data = await fetchVariantJson(url, token);
+
+      all.push(...data.rows);
+
+      if (!data.meta.nextHref) break;
+      offset += 100;
+    }
+
+    // 2) Upsert
+    let upserted = 0;
+    let skippedNoProduct = 0;
+
+    for (const v of all) {
+      keepVariantMsIds.add(v.id);
+
+      const productMsId = pickIdFromHref(v.product?.meta?.href);
+      if (!productMsId) {
+        skippedNoProduct += 1;
+        continue;
+      }
+
+      const product = await productQuery.findOne({
+        where: { moyskladId: productMsId },
+        select: ["id"],
+      });
+
+      if (!product) {
+        skippedNoProduct += 1;
+        continue;
+      }
+
+      const existing = await variantQuery.findOne({
+        where: { moyskladId: v.id },
+        select: ["id"],
+      });
+      const websitePrices = getWebsitePrices(v.salePrices);
+
+      const payload = {
+        name: v.name,
+        moyskladId: v.id,
+        href: `https://api.moysklad.ru/api/remap/1.2/entity/variant/${v.id}`, // ← добавить
+        code: v.code ?? null,
+        updated: v.updated ?? null,
+        product: product.id,
+        characteristics: v.characteristics ?? [],
+        price: websitePrices.price,
+        priceOld: websitePrices.priceOld,
+        publishedAt: new Date().toISOString(),
+      };
+
+      if (existing) {
+        await variantQuery.update({ where: { id: existing.id }, data: payload });
+      } else {
+        await variantQuery.create({ data: payload });
+      }
+
+      upserted += 1;
+    }
+
+    // 3) Чистка: удаляем variants, которых больше нет в МС
+    if (keepVariantMsIds.size === 0) {
+      throw new Error("Variant sync aborted: MoySklad returned zero variants");
+    }
+
+    await variantQuery.deleteMany({
+      where: { moyskladId: { $notIn: Array.from(keepVariantMsIds) } },
+    });
+
+    const result = { upserted, skippedNoProduct };
+
+    await markSyncOk("variants");
+
+    return result;
+  } catch (error) {
+    await markSyncError("variants", error);
+    throw error;
+  } finally {
+    await releaseMoySkladSyncLock("variants");
+  }
+}
+
 export async function syncAllVariants(): Promise<{ upserted: number; skippedNoProduct: number }> {
-  const token = process.env.MOYSKLAD_ACCESS_TOKEN;
-  if (!token) throw new Error("MOYSKLAD_ACCESS_TOKEN is not set");
-
-  const variantQuery = strapi.db.query("api::moysklad-variant.moysklad-variant");
-  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
-
-  const keepVariantMsIds = new Set<string>();
-
-  // 1) Забираем всё из MoySklad (пагинация)
-  const all: MoySkladVariant[] = [];
-  let offset = 0;
-
-  while (true) {
-    const url = `https://api.moysklad.ru/api/remap/1.2/entity/variant?limit=100&offset=${offset}`;
-    const data = await fetchVariantJson(url, token);
-
-    all.push(...data.rows);
-
-    if (!data.meta.nextHref) break;
-    offset += 100;
-  }
-
-  // 2) Upsert
-  let upserted = 0;
-  let skippedNoProduct = 0;
-
-  for (const v of all) {
-    keepVariantMsIds.add(v.id);
-
-    const productMsId = pickIdFromHref(v.product?.meta?.href);
-    if (!productMsId) {
-      skippedNoProduct += 1;
-      continue;
-    }
-
-    const product = await productQuery.findOne({
-      where: { moyskladId: productMsId },
-      select: ["id"],
-    });
-
-    if (!product) {
-      skippedNoProduct += 1;
-      continue;
-    }
-
-    const existing = await variantQuery.findOne({
-      where: { moyskladId: v.id },
-      select: ["id"],
-    });
-    const websitePrices = getWebsitePrices(v.salePrices);
-
-    const payload = {
-      name: v.name,
-      moyskladId: v.id,
-      href: `https://api.moysklad.ru/api/remap/1.2/entity/variant/${v.id}`, // ← добавить
-      code: v.code ?? null,
-      updated: v.updated ?? null,
-      product: product.id,
-      characteristics: v.characteristics ?? [],
-      price: websitePrices.price,
-      priceOld: websitePrices.priceOld,
-      publishedAt: new Date().toISOString(),
-    };
-
-    if (existing) {
-      await variantQuery.update({ where: { id: existing.id }, data: payload });
-    } else {
-      await variantQuery.create({ data: payload });
-    }
-
-    upserted += 1;
-  }
-
-  // 3) Чистка: удаляем variants, которых больше нет в МС
-  await variantQuery.deleteMany({
-    where: { moyskladId: { $notIn: Array.from(keepVariantMsIds) } },
-  });
-
-  return { upserted, skippedNoProduct };
+  return enqueueMoySkladFullSync("variants", syncAllVariantsUnlocked);
 }
