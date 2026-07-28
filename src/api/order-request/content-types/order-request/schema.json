@@ -1,0 +1,34 @@
+{
+  "kind": "collectionType",
+  "collectionName": "order_requests",
+  "info": {
+    "singularName": "order-request",
+    "pluralName": "order-requests",
+    "displayName": "Order Request"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "idempotencyKey": {
+      "type": "string",
+      "required": true,
+      "unique": true,
+      "private": true
+    },
+    "status": {
+      "type": "enumeration",
+      "enum": ["processing", "succeeded"],
+      "required": true,
+      "default": "processing"
+    },
+    "orderId": {
+      "type": "string",
+      "private": true
+    },
+    "orderName": {
+      "type": "string",
+      "private": true
+    }
+  }
+}

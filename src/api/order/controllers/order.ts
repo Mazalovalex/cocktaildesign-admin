@@ -6,13 +6,24 @@ type ValidationErrorCode =
   | "invalid_item_code"
   | "invalid_quantity"
   | "too_many_items"
-  | "order_validation_failed";
+  | "order_validation_failed"
+  | "invalid_idempotency_key";
+
+type OrderRequestRow = {
+  id: number;
+  idempotencyKey: string;
+  status: "processing" | "succeeded";
+  orderId?: string | null;
+  orderName?: string | null;
+};
 
 type SanitizedItem = {
   code: string;
   quantity: number;
   engraving: boolean;
 };
+
+const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 function sendValidationError(ctx: Context, code: ValidationErrorCode) {
   ctx.status = 400;
@@ -25,6 +36,50 @@ function getString(value: unknown): string | null {
 
 function ensureMaxLength(value: string, max: number): boolean {
   return value.length <= max;
+}
+
+function getIdempotencyKey(ctx: Context): string | null {
+  const raw = ctx.get("Idempotency-Key");
+  const key = typeof raw === "string" ? raw.trim() : "";
+
+  if (!key || !IDEMPOTENCY_KEY_PATTERN.test(key)) {
+    return null;
+  }
+
+  return key;
+}
+
+function sendExistingOrderRequest(ctx: Context, existing: OrderRequestRow): boolean {
+  if (
+    existing.status === "succeeded" &&
+    typeof existing.orderId === "string" &&
+    existing.orderId.trim() !== "" &&
+    typeof existing.orderName === "string" &&
+    existing.orderName.trim() !== ""
+  ) {
+    ctx.status = 200;
+    ctx.body = {
+      ok: true,
+      orderId: existing.orderId,
+      orderName: existing.orderName,
+      replayed: true,
+    };
+    return true;
+  }
+
+  ctx.status = 409;
+  ctx.body = { ok: false, error: "order_in_progress" };
+  return true;
+}
+
+async function deleteOrderRequestSafely(orderRequestId: number) {
+  const orderRequestQuery = strapi.db.query("api::order-request.order-request");
+
+  try {
+    await orderRequestQuery.delete({ where: { id: orderRequestId } });
+  } catch {
+    strapi.log.warn("[order] Failed to delete order-request record after pre-order error");
+  }
 }
 
 function sanitizeOrderPayload(body: unknown): {
@@ -146,6 +201,52 @@ function sanitizeOrderPayload(body: unknown): {
   };
 }
 
+async function findOrderRequestByKey(idempotencyKey: string): Promise<OrderRequestRow | null> {
+  const orderRequestQuery = strapi.db.query("api::order-request.order-request");
+
+  const row = await orderRequestQuery.findOne({
+    where: { idempotencyKey },
+  });
+
+  if (!row) {
+    return null;
+  }
+
+  return row as OrderRequestRow;
+}
+
+async function acquireOrderRequestRecord(idempotencyKey: string): Promise<
+  | { kind: "continue"; orderRequestId: number }
+  | { kind: "handled" }
+> {
+  const orderRequestQuery = strapi.db.query("api::order-request.order-request");
+
+  let existing = await findOrderRequestByKey(idempotencyKey);
+
+  if (existing) {
+    return { kind: "handled" };
+  }
+
+  try {
+    const created = await orderRequestQuery.create({
+      data: {
+        idempotencyKey,
+        status: "processing",
+      },
+    });
+
+    return { kind: "continue", orderRequestId: created.id as number };
+  } catch {
+    existing = await findOrderRequestByKey(idempotencyKey);
+
+    if (existing) {
+      return { kind: "handled" };
+    }
+
+    throw new Error("order_request_create_failed");
+  }
+}
+
 export default {
   async create(ctx: Context) {
     const sanitizedPayload = sanitizeOrderPayload(ctx.request.body);
@@ -163,86 +264,143 @@ export default {
       return;
     }
 
-    try {
-      // 1. Создаём контрагента
-      const agentHref = await orderService.createCounterparty(name, phone);
+    const positions: {
+      productHref: string;
+      productType: string;
+      quantity: number;
+      price: number;
+      engraving: boolean;
+      discountExcluded: boolean;
+      name: string;
+    }[] = [];
 
-      // 2. Ищем товары по коду и берём только trusted server-side поля
-      const positions: {
-        productHref: string;
-        productType: string;
-        quantity: number;
-        price: number;
-        engraving: boolean;
-        discountExcluded: boolean;
-        name: string;
-      }[] = [];
+    let trustedSubtotal = 0;
 
-      let trustedSubtotal = 0;
+    for (const item of items) {
+      try {
+        const resolved = await orderService.resolveOrderItemByCode(item.code);
 
-      for (const item of items) {
-        try {
-          const resolved = await orderService.resolveOrderItemByCode(item.code);
+        positions.push({
+          productHref: resolved.href,
+          productType: resolved.type,
+          quantity: item.quantity,
+          price: resolved.trustedPriceRub,
+          engraving: item.engraving,
+          discountExcluded: resolved.trustedDiscountExcluded,
+          name: resolved.trustedName,
+        });
 
-          positions.push({
-            productHref: resolved.href,
-            productType: resolved.type,
-            quantity: item.quantity,
-            price: resolved.trustedPriceRub,
-            engraving: item.engraving,
-            discountExcluded: resolved.trustedDiscountExcluded,
-            name: resolved.trustedName,
-          });
-
-          trustedSubtotal += resolved.trustedPriceRub * item.quantity;
-        } catch (error) {
-          const errorCode = (error as { code?: string })?.code;
-          if (
-            errorCode === "invalid_item_code" ||
-            errorCode === "item_not_found" ||
-            errorCode === "item_price_missing" ||
-            errorCode === "item_price_invalid"
-          ) {
-            ctx.status = 400;
-            ctx.body = { ok: false, error: errorCode };
-            return;
-          }
-          throw error;
+        trustedSubtotal += resolved.trustedPriceRub * item.quantity;
+      } catch (error) {
+        const errorCode = (error as { code?: string })?.code;
+        if (
+          errorCode === "invalid_item_code" ||
+          errorCode === "item_not_found" ||
+          errorCode === "item_price_missing" ||
+          errorCode === "item_price_invalid"
+        ) {
+          ctx.status = 400;
+          ctx.body = { ok: false, error: errorCode };
+          return;
         }
+        throw error;
       }
+    }
 
-      if (positions.length === 0) {
-        sendValidationError(ctx, "order_validation_failed");
+    if (positions.length === 0) {
+      sendValidationError(ctx, "order_validation_failed");
+      return;
+    }
+
+    const trustedVolumeDiscountPercent = await orderService.resolveVolumeDiscountPercent(trustedSubtotal);
+
+    const engravingItems = positions.filter((i) => i.engraving).map((i) => i.name);
+
+    const descriptionParts = [
+      buyerType === "legal" ? "Юрлицо" : "Физлицо",
+      engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
+      telegram ? `Telegram: ${telegram}` : null,
+      inn ? `ИНН: ${inn}` : null,
+      trustedVolumeDiscountPercent > 0 ? `Скидка за объём ${trustedVolumeDiscountPercent}%` : null,
+      promoCode ? `Промокод: ${promoCode}` : null,
+      comment ? `Комментарий: ${comment}` : null,
+    ].filter(Boolean);
+
+    const description = descriptionParts.join(" | ");
+
+    const idempotencyKey = getIdempotencyKey(ctx);
+    if (!idempotencyKey) {
+      sendValidationError(ctx, "invalid_idempotency_key");
+      return;
+    }
+
+    const existingBeforeCreate = await findOrderRequestByKey(idempotencyKey);
+    if (existingBeforeCreate && sendExistingOrderRequest(ctx, existingBeforeCreate)) {
+      return;
+    }
+
+    let orderRequestId: number | null = null;
+    let orderCreationStarted = false;
+
+    try {
+      const acquireResult = await acquireOrderRequestRecord(idempotencyKey);
+
+      if (acquireResult.kind === "handled") {
+        const existingAfterRace = await findOrderRequestByKey(idempotencyKey);
+        if (existingAfterRace && sendExistingOrderRequest(ctx, existingAfterRace)) {
+          return;
+        }
+
+        ctx.status = 409;
+        ctx.body = { ok: false, error: "order_in_progress" };
         return;
       }
 
-      // 3. Серверный пересчёт процента скидки за объём (клиентское поле игнорируем)
-      const trustedVolumeDiscountPercent = await orderService.resolveVolumeDiscountPercent(trustedSubtotal);
+      orderRequestId = acquireResult.orderRequestId;
 
-      // 3. Формируем комментарий к заказу
-      const engravingItems = positions.filter((i) => i.engraving).map((i) => i.name);
+      const agentHref = await orderService.createCounterparty(name, phone);
 
-      const descriptionParts = [
-        buyerType === "legal" ? "Юрлицо" : "Физлицо",
-        engravingItems.length > 0 ? `Гравировка: ${engravingItems.join(", ")}` : null,
-        telegram ? `Telegram: ${telegram}` : null,
-        inn ? `ИНН: ${inn}` : null,
-        trustedVolumeDiscountPercent > 0 ? `Скидка за объём ${trustedVolumeDiscountPercent}%` : null,
-        promoCode ? `Промокод: ${promoCode}` : null,
-        comment ? `Комментарий: ${comment}` : null,
-      ].filter(Boolean);
+      orderCreationStarted = true;
 
-      // 4. Создаём заказ
       const order = await orderService.createCustomerOrder({
         agentHref,
         positions,
-        description: descriptionParts.join(" | "),
+        description,
         shipmentAddress: address,
         volumeDiscountPercent: trustedVolumeDiscountPercent,
       });
 
-      ctx.body = { ok: true, orderId: order.id, orderName: order.name };
+      const orderId = typeof order.id === "string" ? order.id.trim() : "";
+      const orderName = typeof order.name === "string" ? order.name.trim() : "";
+
+      if (!orderId || !orderName) {
+        throw new Error("invalid_moysklad_order_response");
+      }
+
+      const orderRequestQuery = strapi.db.query("api::order-request.order-request");
+
+      await orderRequestQuery.update({
+        where: { id: orderRequestId },
+        data: {
+          status: "succeeded",
+          orderId,
+          orderName,
+        },
+      });
+
+      ctx.body = { ok: true, orderId, orderName };
     } catch (err) {
+      if (orderRequestId !== null && !orderCreationStarted) {
+        await deleteOrderRequestSafely(orderRequestId);
+      }
+
+      if (orderCreationStarted) {
+        strapi.log.error("[order] Order status unknown after MoySklad customer order call");
+        ctx.status = 500;
+        ctx.body = { ok: false, error: "order_status_unknown" };
+        return;
+      }
+
       strapi.log.error("Ошибка создания заказа в МойСклад");
       ctx.status = 500;
       ctx.body = { ok: false, error: "order_validation_failed" };
