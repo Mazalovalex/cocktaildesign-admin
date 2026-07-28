@@ -125,13 +125,26 @@ async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderIte
     select: ["id", "name", "price", "href"],
     populate: {
       product: {
-        select: ["id", "name", "price", "discountExcluded", "href", "type"],
+        select: [
+          "id",
+          "name",
+          "price",
+          "discountExcluded",
+          "href",
+          "type",
+          "isHiddenOnSite",
+        ],
       },
     },
   });
 
   if (variant) {
     const parentProduct = variant.product ?? null;
+
+    if (!parentProduct || parentProduct.isHiddenOnSite === true) {
+      throw createOrderError("item_not_found");
+    }
+
     const resolvedPrice = isValidPriceRub(variant.price)
       ? variant.price
       : isValidPriceRub(parentProduct?.price)
@@ -174,10 +187,14 @@ async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderIte
 
   const product = await productQuery.findOne({
     where: { code },
-    select: ["id", "name", "price", "discountExcluded", "href", "type"],
+    select: ["id", "name", "price", "discountExcluded", "href", "type", "isHiddenOnSite"],
   });
 
   if (!product) {
+    throw createOrderError("item_not_found");
+  }
+
+  if (product.isHiddenOnSite === true) {
     throw createOrderError("item_not_found");
   }
 
