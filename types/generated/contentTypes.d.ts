@@ -531,6 +531,50 @@ export interface ApiDiscountTierDiscountTier
   };
 }
 
+export interface ApiHomepageHomepage extends Struct.SingleTypeSchema {
+  collectionName: 'homepages';
+  info: {
+    description: '\u0423\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435 \u0442\u043E\u0432\u0430\u0440\u043D\u044B\u043C\u0438 \u043F\u043E\u0434\u0431\u043E\u0440\u043A\u0430\u043C\u0438 \u0433\u043B\u0430\u0432\u043D\u043E\u0439 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u044B';
+    displayName: '\u0413\u043B\u0430\u0432\u043D\u0430\u044F \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0430';
+    pluralName: 'homepages';
+    singularName: 'homepage';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    collectionAfterBanners: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::catalog-collection.catalog-collection'
+    >;
+    collectionAfterKnowledge: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::catalog-collection.catalog-collection'
+    >;
+    collectionAfterShortcuts: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::catalog-collection.catalog-collection'
+    >;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::homepage.homepage'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    saleCollectionAfterTelegram: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::catalog-collection.catalog-collection'
+    >;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiKnowledgeItemKnowledgeItem
   extends Struct.CollectionTypeSchema {
   collectionName: 'knowledge_items';
@@ -847,6 +891,43 @@ export interface ApiNastrojkiNavigacziiNastrojkiNavigaczii
     > &
       Schema.Attribute.Private;
     publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
+export interface ApiOrderRequestOrderRequest
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'order_requests';
+  info: {
+    displayName: 'Order Request';
+    pluralName: 'order-requests';
+    singularName: 'order-request';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    idempotencyKey: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.Private &
+      Schema.Attribute.Unique;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::order-request.order-request'
+    > &
+      Schema.Attribute.Private;
+    orderId: Schema.Attribute.String & Schema.Attribute.Private;
+    orderName: Schema.Attribute.String & Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    status: Schema.Attribute.Enumeration<['processing', 'succeeded']> &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<'processing'>;
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
@@ -1494,12 +1575,14 @@ declare module '@strapi/strapi' {
       'api::catalog-collection.catalog-collection': ApiCatalogCollectionCatalogCollection;
       'api::color.color': ApiColorColor;
       'api::discount-tier.discount-tier': ApiDiscountTierDiscountTier;
+      'api::homepage.homepage': ApiHomepageHomepage;
       'api::knowledge-item.knowledge-item': ApiKnowledgeItemKnowledgeItem;
       'api::moysklad-bundle-item.moysklad-bundle-item': ApiMoyskladBundleItemMoyskladBundleItem;
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
       'api::nastrojki-navigaczii.nastrojki-navigaczii': ApiNastrojkiNavigacziiNastrojkiNavigaczii;
+      'api::order-request.order-request': ApiOrderRequestOrderRequest;
       'api::promo-code.promo-code': ApiPromoCodePromoCode;
       'api::specification-type.specification-type': ApiSpecificationTypeSpecificationType;
       'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;

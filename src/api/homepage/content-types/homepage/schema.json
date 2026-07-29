@@ -1,0 +1,36 @@
+{
+  "kind": "singleType",
+  "collectionName": "homepages",
+  "info": {
+    "singularName": "homepage",
+    "pluralName": "homepages",
+    "displayName": "Главная страница",
+    "description": "Управление товарными подборками главной страницы"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "collectionAfterShortcuts": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::catalog-collection.catalog-collection"
+    },
+    "saleCollectionAfterTelegram": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::catalog-collection.catalog-collection"
+    },
+    "collectionAfterKnowledge": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::catalog-collection.catalog-collection"
+    },
+    "collectionAfterBanners": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::catalog-collection.catalog-collection"
+    }
+  }
+}
