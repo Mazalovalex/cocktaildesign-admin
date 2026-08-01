@@ -62,6 +62,20 @@ export interface BlocksTextBlock extends Struct.ComponentSchema {
   };
 }
 
+export interface CatalogProductBadgeAssignment extends Struct.ComponentSchema {
+  collectionName: 'components_catalog_product_badge_assignments';
+  info: {
+    displayName: '\u041D\u0430\u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0435 \u0431\u0435\u0439\u0434\u0436\u0430';
+  };
+  attributes: {
+    badge: Schema.Attribute.Relation<
+      'manyToOne',
+      'api::product-badge.product-badge'
+    > &
+      Schema.Attribute.Required;
+  };
+}
+
 export interface NavigationCategoryLink extends Struct.ComponentSchema {
   collectionName: 'components_navigation_category_links';
   info: {
@@ -99,6 +113,7 @@ declare module '@strapi/strapi' {
       'blocks.link-block': BlocksLinkBlock;
       'blocks.list-block': BlocksListBlock;
       'blocks.text-block': BlocksTextBlock;
+      'catalog.product-badge-assignment': CatalogProductBadgeAssignment;
       'navigation.category-link': NavigationCategoryLink;
       'product.harakteristika': ProductHarakteristika;
     }

@@ -1,0 +1,30 @@
+{
+  "kind": "collectionType",
+  "collectionName": "product_badges",
+  "info": {
+    "singularName": "product-badge",
+    "pluralName": "product-badges",
+    "displayName": "Товарные бейджи"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "label": {
+      "type": "string",
+      "required": true,
+      "maxLength": 30
+    },
+    "backgroundColor": {
+      "type": "string",
+      "required": true,
+      "default": "#0F172A"
+    },
+    "textColor": {
+      "type": "string",
+      "required": true,
+      "default": "#FFFFFF"
+    }
+  }
+}

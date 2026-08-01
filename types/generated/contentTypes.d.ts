@@ -757,6 +757,10 @@ export interface ApiMoyskladProductMoyskladProduct
     draftAndPublish: false;
   };
   attributes: {
+    badges: Schema.Attribute.Component<
+      'catalog.product-badge-assignment',
+      true
+    >;
     bundleComponentItems: Schema.Attribute.Relation<
       'oneToMany',
       'api::moysklad-bundle-item.moysklad-bundle-item'
@@ -941,6 +945,45 @@ export interface ApiOrderRequestOrderRequest
     status: Schema.Attribute.Enumeration<['processing', 'succeeded']> &
       Schema.Attribute.Required &
       Schema.Attribute.DefaultTo<'processing'>;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
+export interface ApiProductBadgeProductBadge
+  extends Struct.CollectionTypeSchema {
+  collectionName: 'product_badges';
+  info: {
+    displayName: '\u0422\u043E\u0432\u0430\u0440\u043D\u044B\u0435 \u0431\u0435\u0439\u0434\u0436\u0438';
+    pluralName: 'product-badges';
+    singularName: 'product-badge';
+  };
+  options: {
+    draftAndPublish: false;
+  };
+  attributes: {
+    backgroundColor: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<'#0F172A'>;
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    label: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.SetMinMaxLength<{
+        maxLength: 30;
+      }>;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::product-badge.product-badge'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    textColor: Schema.Attribute.String &
+      Schema.Attribute.Required &
+      Schema.Attribute.DefaultTo<'#FFFFFF'>;
     updatedAt: Schema.Attribute.DateTime;
     updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
       Schema.Attribute.Private;
@@ -1596,6 +1639,7 @@ declare module '@strapi/strapi' {
       'api::moysklad-variant.moysklad-variant': ApiMoyskladVariantMoyskladVariant;
       'api::nastrojki-navigaczii.nastrojki-navigaczii': ApiNastrojkiNavigacziiNastrojkiNavigaczii;
       'api::order-request.order-request': ApiOrderRequestOrderRequest;
+      'api::product-badge.product-badge': ApiProductBadgeProductBadge;
       'api::promo-code.promo-code': ApiPromoCodePromoCode;
       'api::specification-type.specification-type': ApiSpecificationTypeSpecificationType;
       'api::weekly-product-block.weekly-product-block': ApiWeeklyProductBlockWeeklyProductBlock;

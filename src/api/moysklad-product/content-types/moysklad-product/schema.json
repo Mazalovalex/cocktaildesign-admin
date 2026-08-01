@@ -126,6 +126,12 @@
       "target": "api::moysklad-variant.moysklad-variant",
       "mappedBy": "product"
     },
+    "badges": {
+      "type": "component",
+      "component": "catalog.product-badge-assignment",
+      "repeatable": true,
+      "required": false
+    },
     "discountExcluded": {
       "type": "boolean",
       "default": false

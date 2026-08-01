@@ -1,0 +1,16 @@
+{
+  "collectionName": "components_catalog_product_badge_assignments",
+  "info": {
+    "displayName": "Назначение бейджа"
+  },
+  "options": {},
+  "attributes": {
+    "badge": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::product-badge.product-badge",
+      "required": true
+    }
+  },
+  "config": {}
+}
