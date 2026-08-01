@@ -22,6 +22,7 @@ import {
 } from "../../../utils/moysklad-prices";
 import { isOwnProductionMoySkladProduct } from "../../../utils/moysklad-own-production";
 import { getStorefrontVisibleProductFilter } from "../../../utils/storefront-product-visibility";
+import { rebuildProductSearchIndex } from "../../../utils/rebuild-product-search-index";
 
 import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
 
@@ -524,9 +525,11 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     }
 
     let productDocumentId: string | null = null;
+    let savedProductId: number;
 
     if (existing) {
       await productQuery.update({ where: { id: existing.id }, data: payload });
+      savedProductId = existing.id;
       productDocumentId =
         typeof (existing as { documentId?: unknown }).documentId === "string"
           ? (existing as { documentId: string }).documentId
@@ -534,12 +537,15 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       strapi.log.info(`[moysklad-product] updated: ${moyskladId}`);
     } else {
       const created = await productQuery.create({ data: payload });
+      savedProductId = created.id;
       productDocumentId =
         typeof (created as { documentId?: unknown }).documentId === "string"
           ? (created as { documentId: string }).documentId
           : null;
       strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
     }
+
+    await rebuildProductSearchIndex(strapi, savedProductId);
 
     if (productDocumentId) {
       await syncProductInOwnProductionCollection(
