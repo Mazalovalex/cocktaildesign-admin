@@ -146,5 +146,29 @@
       "type": "boolean",
       "default": false
     }
+  },
+  "config": {
+    "metadatas": {
+      "searchText": {
+        "edit": {
+          "label": "Поисковый текст",
+          "description": "Заполняется автоматически.",
+          "editable": false
+        }
+      },
+      "searchCodes": {
+        "edit": {
+          "label": "Поисковые артикулы",
+          "description": "Заполняются автоматически.",
+          "editable": false
+        }
+      },
+      "badges": {
+        "edit": {
+          "label": "Бейджи",
+          "description": "Выберите бейджи для карточки. Например: «Хит»."
+        }
+      }
+    }
   }
 }

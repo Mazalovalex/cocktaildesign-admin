@@ -12,5 +12,14 @@
       "required": true
     }
   },
-  "config": {}
+  "config": {
+    "metadatas": {
+      "badge": {
+        "edit": {
+          "label": "Бейдж",
+          "description": "Выберите готовый бейдж. Например: «Хит»."
+        }
+      }
+    }
+  }
 }

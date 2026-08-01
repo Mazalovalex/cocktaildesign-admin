@@ -26,5 +26,27 @@
       "required": true,
       "default": "#FFFFFF"
     }
+  },
+  "config": {
+    "metadatas": {
+      "label": {
+        "edit": {
+          "label": "Текст бейджа",
+          "description": "До 30 знаков. Например: «Хит»."
+        }
+      },
+      "backgroundColor": {
+        "edit": {
+          "label": "Цвет фона",
+          "description": "Укажите HEX-код. Например: #0F172A."
+        }
+      },
+      "textColor": {
+        "edit": {
+          "label": "Цвет текста",
+          "description": "Укажите HEX-код. Например: #FFFFFF."
+        }
+      }
+    }
   }
 }

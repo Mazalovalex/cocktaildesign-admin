@@ -55,5 +55,39 @@
       "relation": "oneToOne",
       "target": "api::moysklad-category.moysklad-category"
     }
+  },
+  "config": {
+    "metadatas": {
+      "selectionMode": {
+        "edit": {
+          "label": "Режим подборки",
+          "description": "Выберите, откуда брать товары: вручную, из категории, со скидкой или из новинок."
+        }
+      },
+      "noveltyDays": {
+        "edit": {
+          "label": "Период новинок на сайте",
+          "description": "Укажите срок в днях. Например: 100."
+        }
+      },
+      "noveltyBadgeColor": {
+        "edit": {
+          "label": "Цвет бейджа «Новинка»",
+          "description": "Укажите HEX-код. Например: #2EAE4A."
+        }
+      },
+      "products": {
+        "edit": {
+          "label": "Товары",
+          "description": "Добавьте товары вручную."
+        }
+      },
+      "sourceCategory": {
+        "edit": {
+          "label": "Категория",
+          "description": "Выберите категорию-источник."
+        }
+      }
+    }
   }
 }
