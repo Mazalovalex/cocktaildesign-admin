@@ -39,6 +39,9 @@
     "updated": {
       "type": "datetime"
     },
+    "moyskladCreatedAt": {
+      "type": "datetime"
+    },
     "price": {
       "type": "integer"
     },

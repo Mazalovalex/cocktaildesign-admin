@@ -73,6 +73,12 @@
     "updated": {
       "type": "datetime"
     },
+    "moyskladCreatedAt": {
+      "type": "datetime"
+    },
+    "moyskladNoveltyAt": {
+      "type": "datetime"
+    },
     "image": {
       "type": "media",
       "multiple": true,

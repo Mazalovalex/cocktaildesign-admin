@@ -1,6 +1,11 @@
 //backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
 import { getStorefrontVisibleProductFilter } from "../../../utils/storefront-product-visibility";
+import {
+  getProductNoveltyConfig,
+  isProductNew,
+  type ProductNoveltyConfig,
+} from "../../../utils/product-novelty";
 import syncServiceFactory from "../services/sync";
 
 function isSyncLockError(err: unknown): boolean {
@@ -169,6 +174,7 @@ type ProductRow = {
   category?: { id?: number | null; name?: string | null } | null;
   specifications?: ProductSpecificationRow[] | null;
   variants?: VariantRow[] | null;
+  moyskladNoveltyAt?: string | null;
 };
 
 function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
@@ -184,6 +190,26 @@ function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
       image: (variant as any).image ?? null,
     },
   }));
+}
+
+function mapCatalogProductPreviewItem(product: ProductRow, noveltyConfig: ProductNoveltyConfig) {
+  return {
+    id: product.id,
+    attributes: {
+      name: product.name ?? null,
+      moyskladId: product.moyskladId ?? null,
+      slug: product.slug ?? null,
+      price: product.price ?? null,
+      priceOld: product.priceOld ?? null,
+      engravingEnabled: product.engravingEnabled ?? false,
+      discountExcluded: product.discountExcluded ?? false,
+      code: product.code ?? null,
+      image: (product as any).image ?? null,
+      variants: mapPreviewVariants((product as any).variants),
+      isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
+      noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+    },
+  };
 }
 
 function hasRealDiscount(item: {
@@ -204,6 +230,113 @@ function productHasRealDiscount(product: ProductRow): boolean {
   }
 
   return hasRealDiscount(product);
+}
+
+/** noveltyDays из подборки: целое >= 1, иначе 100. */
+function resolveNoveltyDays(value: unknown): number {
+  const raw = typeof value === "number" ? value : Number(value);
+
+  if (!Number.isFinite(raw) || raw < 1) {
+    return 100;
+  }
+
+  return Math.floor(raw);
+}
+
+/** Cutoff = сейчас − noveltyDays суток, ISO UTC. */
+function getNoveltyCutoffIso(noveltyDays: number): string {
+  const cutoffDate = new Date(Date.now() - noveltyDays * 24 * 60 * 60 * 1000);
+  return cutoffDate.toISOString();
+}
+
+/** Where для selectionMode=new: видимость + moyskladNoveltyAt в периоде. */
+function buildNewCollectionProductsWhere(noveltyDays: number) {
+  const cutoff = getNoveltyCutoffIso(noveltyDays);
+
+  return {
+    $and: [
+      getStorefrontVisibleProductFilter(),
+      { moyskladNoveltyAt: { $notNull: true } },
+      { moyskladNoveltyAt: { $gte: cutoff } },
+    ],
+  };
+}
+
+const COLLECTION_PRODUCT_SELECT = [
+  "id",
+  "name",
+  "moyskladId",
+  "slug",
+  "price",
+  "priceOld",
+  "engravingEnabled",
+  "code",
+  "discountExcluded",
+  "moyskladNoveltyAt",
+] as const;
+
+const CATALOG_PREVIEW_PRODUCT_SELECT = [
+  "id",
+  "name",
+  "moyskladId",
+  "slug",
+  "price",
+  "priceOld",
+  "engravingEnabled",
+  "code",
+  "discountExcluded",
+  "moyskladNoveltyAt",
+] as const;
+
+const COLLECTION_PRODUCT_POPULATE = {
+  image: { select: ["url", "alternativeText", "formats"] },
+  category: { select: ["id", "name", "slug"] },
+  variants: {
+    select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+    populate: {
+      image: { select: ["url", "alternativeText", "formats"] },
+    },
+    orderBy: { id: "asc" },
+  },
+} as const;
+
+const NEW_COLLECTION_ORDER_BY = [
+  { moyskladNoveltyAt: "desc" as const },
+  { id: "desc" as const },
+];
+
+const CATEGORY_PAGE_SIZE = 200;
+
+async function fetchAllCategoriesForDescendants(categoryQuery: {
+  findMany: (args: Record<string, unknown>) => Promise<
+    Array<{ id: number; parent?: { id?: number | null } | null }>
+  >;
+}): Promise<Array<{ id: number; parent?: { id?: number | null } | null }>> {
+  const all: Array<{ id: number; parent?: { id?: number | null } | null }> = [];
+  let offset = 0;
+
+  while (true) {
+    const rows = await categoryQuery.findMany({
+      select: ["id"],
+      populate: { parent: { select: ["id"] } },
+      orderBy: { id: "asc" },
+      limit: CATEGORY_PAGE_SIZE,
+      offset,
+    });
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      break;
+    }
+
+    all.push(...rows);
+    offset += rows.length;
+
+    if (rows.length < CATEGORY_PAGE_SIZE) {
+      break;
+    }
+  }
+
+  return all;
 }
 
 // ----------------------------------------------------------------------------
@@ -231,6 +364,40 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
 
   const selectionMode = collection.selectionMode ?? "manual";
 
+  // --- new: новинки по moyskladNoveltyAt (для дерева категорий — все совпадения, страницами) ---
+  if (selectionMode === "new") {
+    const noveltyDays = resolveNoveltyDays((collection as { noveltyDays?: unknown }).noveltyDays);
+    const where = buildNewCollectionProductsWhere(noveltyDays);
+
+    const pageSize = 200;
+    const allRows: ProductRow[] = [];
+    let pageOffset = 0;
+
+    while (true) {
+      const rows: ProductRow[] = await productQuery.findMany({
+        where,
+        select: [...COLLECTION_PRODUCT_SELECT],
+        populate: COLLECTION_PRODUCT_POPULATE,
+        orderBy: NEW_COLLECTION_ORDER_BY,
+        limit: pageSize,
+        offset: pageOffset,
+      });
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        break;
+      }
+
+      allRows.push(...rows);
+      pageOffset += rows.length;
+
+      if (rows.length < pageSize) {
+        break;
+      }
+    }
+
+    return allRows;
+  }
+
   // --- manual: товары выбраны вручную в админке ---
   if (selectionMode === "manual") {
     const productIds = (collection.products ?? []).map((p: any) => p.id);
@@ -243,7 +410,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...getStorefrontVisibleProductFilter(),
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -288,7 +455,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...getStorefrontVisibleProductFilter(),
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -311,7 +478,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...getStorefrontVisibleProductFilter(),
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["id", "name", "slug"] },
@@ -506,7 +673,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const rows: ProductRow[] = await productQuery.findMany({
       where,
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
@@ -524,22 +691,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const hasMore = offset + rows.length < total;
 
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
     ctx.body = {
-      items: rows.map((p) => ({
-        id: p.id,
-        attributes: {
-          name: p.name ?? null,
-          moyskladId: p.moyskladId ?? null,
-          slug: p.slug ?? null,
-          price: p.price ?? null,
-          priceOld: p.priceOld ?? null,
-          engravingEnabled: p.engravingEnabled ?? false,
-          discountExcluded: p.discountExcluded ?? false,
-          code: p.code ?? null,
-          image: (p as any).image ?? null,
-          variants: mapPreviewVariants((p as any).variants),
-        },
-      })),
+      items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
       total,
       limit,
       offset,
@@ -562,7 +719,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...getStorefrontVisibleProductFilter(),
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
@@ -583,22 +740,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const paginatedRows = discountedRows.slice(offset, offset + limit);
     const hasMore = offset + paginatedRows.length < total;
 
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
     ctx.body = {
-      items: paginatedRows.map((p) => ({
-        id: p.id,
-        attributes: {
-          name: p.name ?? null,
-          moyskladId: p.moyskladId ?? null,
-          slug: p.slug ?? null,
-          price: p.price ?? null,
-          priceOld: p.priceOld ?? null,
-          engravingEnabled: p.engravingEnabled ?? false,
-          discountExcluded: p.discountExcluded ?? false,
-          code: p.code ?? null,
-          image: (p as any).image ?? null,
-          variants: mapPreviewVariants((p as any).variants),
-        },
-      })),
+      items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
       total,
       limit,
       offset,
@@ -628,7 +773,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         // Скрываем товары которые выключены менеджером (isHiddenOnSite = true)
         ...getStorefrontVisibleProductFilter(),
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "engravingEnabled", "code", "discountExcluded"],
+      select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         variants: {
@@ -646,22 +791,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     ids.forEach((id, index) => order.set(id, index));
     rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
     ctx.body = {
-      items: rows.map((p) => ({
-        id: p.id,
-        attributes: {
-          name: p.name ?? null,
-          moyskladId: p.moyskladId ?? null,
-          slug: p.slug ?? null,
-          price: p.price ?? null,
-          priceOld: p.priceOld ?? null,
-          engravingEnabled: p.engravingEnabled ?? false,
-          discountExcluded: p.discountExcluded ?? false,
-          code: p.code ?? null,
-          image: (p as any).image ?? null,
-          variants: mapPreviewVariants((p as any).variants),
-        },
-      })),
+      items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
     };
   },
 
@@ -857,6 +990,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const normalizedQuery = q.toLocaleLowerCase("ru");
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
         $and: [
@@ -874,7 +1009,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           getStorefrontVisibleProductFilter(),
         ],
       },
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "code"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "code", "moyskladNoveltyAt"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["name"] },
@@ -954,6 +1089,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
                   image: matchedVariant.image ?? null,
                 }
               : null,
+            isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
+            noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
           },
         };
       }),
@@ -985,9 +1122,11 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const maxOffset = Math.max(0, total - count);
     const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
 
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
     const rows: ProductRow[] = await productQuery.findMany({
       where,
-      select: ["id", "name", "moyskladId", "slug", "price", "priceOld"],
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "moyskladNoveltyAt"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
         category: { select: ["name"] },
@@ -1026,6 +1165,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             priceOld: p.priceOld ?? null,
             image: randomProductImage,
             categoryName: (p as any).category?.name ?? null,
+            isNew: isProductNew(p.moyskladNoveltyAt, noveltyConfig.noveltyDays),
+            noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
           },
         };
       }),
@@ -1040,9 +1181,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
    * - manual: товары выбраны вручную в админке
    * - category: все товары из указанной категории
    * - discount: все товары со скидкой
+   * - new: новинки по moyskladNoveltyAt (фильтр/сортировка/пагинация в БД)
    *
    * Скрытые товары (isHiddenOnSite = true) исключаются — фильтр стоит
-   * внутри getCollectionProducts() для всех режимов.
+   * внутри getCollectionProducts() для всех режимов (для new — в where запроса).
    */
   async collectionProducts(ctx) {
     const collectionSlug = String(ctx.params.slug ?? "").trim();
@@ -1059,12 +1201,97 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const collectionQuery = strapi.db.query("api::catalog-collection.catalog-collection");
     const collection = await collectionQuery.findOne({
       where: { slug: collectionSlug },
-      select: ["id", "title", "slug", "description", "selectionMode"],
+      select: ["id", "title", "slug", "description", "selectionMode", "noveltyDays"],
     });
 
     if (!collection) {
       ctx.status = 404;
       ctx.body = { error: "collection_not_found" };
+      return;
+    }
+
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
+    const selectionMode = collection.selectionMode ?? "manual";
+
+    // --- new: пагинация и сортировка на уровне БД ---
+    if (selectionMode === "new") {
+      const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+      const noveltyDays = resolveNoveltyDays((collection as { noveltyDays?: unknown }).noveltyDays);
+
+      let where: Record<string, unknown> = buildNewCollectionProductsWhere(noveltyDays);
+
+      // Опциональный фильтр по категории (как у остальных режимов)
+      const filterCategorySlug = String(ctx.query.categorySlug ?? "").trim();
+
+      if (filterCategorySlug) {
+        const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+        const rootCategory = await categoryQuery.findOne({
+          where: { slug: filterCategorySlug },
+          select: ["id"],
+        });
+
+        if (!rootCategory) {
+          ctx.body = {
+            collection: {
+              id: String(collection.id),
+              title: collection.title ?? "",
+              slug: collection.slug ?? "",
+              description: collection.description ?? null,
+              selectionMode: "new",
+            },
+            items: [],
+            total: 0,
+            limit,
+            offset,
+            hasMore: false,
+          };
+          return;
+        }
+
+        const allCategories = await fetchAllCategoriesForDescendants(categoryQuery);
+
+        const allowedCategoryIds = collectDescendantCategoryIds({
+          rootId: rootCategory.id,
+          all: allCategories,
+        });
+
+        where = {
+          $and: [where, { category: { id: { $in: allowedCategoryIds } } }],
+        };
+      }
+
+      const total = await productQuery.count({ where });
+
+      const paginatedRows: ProductRow[] =
+        total === 0
+          ? []
+          : await productQuery.findMany({
+              where,
+              select: [...COLLECTION_PRODUCT_SELECT],
+              populate: COLLECTION_PRODUCT_POPULATE,
+              orderBy: NEW_COLLECTION_ORDER_BY,
+              limit,
+              offset,
+            });
+
+      const hasMore = offset + paginatedRows.length < total;
+
+      ctx.body = {
+        collection: {
+          id: String(collection.id),
+          title: collection.title ?? "",
+          slug: collection.slug ?? "",
+          description: collection.description ?? null,
+          selectionMode: "new",
+        },
+        items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
+        total,
+        limit,
+        offset,
+        hasMore,
+      };
       return;
     }
 
@@ -1116,21 +1343,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         description: collection.description ?? null,
         selectionMode: collection.selectionMode ?? "manual",
       },
-      items: paginatedRows.map((p) => ({
-        id: p.id,
-        attributes: {
-          name: p.name ?? null,
-          moyskladId: p.moyskladId ?? null,
-          slug: p.slug ?? null,
-          price: p.price ?? null,
-          priceOld: p.priceOld ?? null,
-          engravingEnabled: p.engravingEnabled ?? false,
-          discountExcluded: p.discountExcluded ?? false,
-          code: p.code ?? null,
-          image: (p as any).image ?? null,
-          variants: mapPreviewVariants((p as any).variants),
-        },
-      })),
+      items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
       total,
       limit,
       offset,

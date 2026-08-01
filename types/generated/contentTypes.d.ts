@@ -452,13 +452,23 @@ export interface ApiCatalogCollectionCatalogCollection
       'api::catalog-collection.catalog-collection'
     > &
       Schema.Attribute.Private;
+    noveltyBadgeColor: Schema.Attribute.String &
+      Schema.Attribute.DefaultTo<'#2eae4a'>;
+    noveltyDays: Schema.Attribute.Integer &
+      Schema.Attribute.SetMinMax<
+        {
+          min: 1;
+        },
+        number
+      > &
+      Schema.Attribute.DefaultTo<100>;
     products: Schema.Attribute.Relation<
       'manyToMany',
       'api::moysklad-product.moysklad-product'
     >;
     publishedAt: Schema.Attribute.DateTime;
     selectionMode: Schema.Attribute.Enumeration<
-      ['manual', 'category', 'discount']
+      ['manual', 'category', 'discount', 'new']
     >;
     slug: Schema.Attribute.UID<'title'> & Schema.Attribute.Required;
     sortOrder: Schema.Attribute.Integer;
@@ -787,9 +797,11 @@ export interface ApiMoyskladProductMoyskladProduct
     > &
       Schema.Attribute.Private;
     lockImages: Schema.Attribute.Boolean & Schema.Attribute.DefaultTo<true>;
+    moyskladCreatedAt: Schema.Attribute.DateTime;
     moyskladId: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
+    moyskladNoveltyAt: Schema.Attribute.DateTime;
     name: Schema.Attribute.String & Schema.Attribute.Required;
     price: Schema.Attribute.Integer;
     priceOld: Schema.Attribute.Integer;
@@ -843,6 +855,7 @@ export interface ApiMoyskladVariantMoyskladVariant
       'api::moysklad-variant.moysklad-variant'
     > &
       Schema.Attribute.Private;
+    moyskladCreatedAt: Schema.Attribute.DateTime;
     moyskladId: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;

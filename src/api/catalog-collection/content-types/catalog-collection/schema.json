@@ -31,8 +31,18 @@
       "enum": [
         "manual",
         "category",
-        "discount"
+        "discount",
+        "new"
       ]
+    },
+    "noveltyDays": {
+      "type": "integer",
+      "default": 100,
+      "min": 1
+    },
+    "noveltyBadgeColor": {
+      "type": "string",
+      "default": "#2eae4a"
     },
     "products": {
       "type": "relation",
