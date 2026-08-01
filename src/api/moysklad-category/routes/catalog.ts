@@ -40,6 +40,12 @@ export default {
     },
     {
       method: "GET",
+      path: "/catalog/search-v2",
+      handler: "moysklad-category.searchV2",
+      config: { auth: false },
+    },
+    {
+      method: "GET",
       path: "/catalog/random-products",
       handler: "moysklad-category.randomProducts",
       config: { auth: false },
