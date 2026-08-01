@@ -59,17 +59,15 @@ export function containsAllSearchTokens(
   searchText: string | null | undefined,
   tokens: string[],
 ): boolean {
-  if (tokens.length === 0) {
-    return false;
-  }
-
   const haystack = searchText ?? "";
 
-  if (!haystack) {
+  if (!haystack || tokens.length === 0) {
     return false;
   }
 
-  return tokens.every((token) => haystack.includes(token));
+  const haystackTokens = new Set(haystack.split(" ").filter(Boolean));
+
+  return tokens.every((token) => haystackTokens.has(token));
 }
 
 export function scoreCatalogSearchCandidate(
