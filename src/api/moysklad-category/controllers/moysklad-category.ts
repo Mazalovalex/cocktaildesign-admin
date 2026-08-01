@@ -855,6 +855,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         "code",
         "discountExcluded",
         "composition",
+        "moyskladNoveltyAt",
       ],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
@@ -962,6 +963,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       };
     });
 
+    const noveltyConfig = await getProductNoveltyConfig(strapi);
+
     ctx.body = {
       item: {
         id: product.id,
@@ -978,6 +981,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: product.engravingEnabled ?? false,
           discountExcluded: product.discountExcluded ?? false,
           code: product.code ?? null,
+          isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
+          noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
           badges: mapProductBadges(product.badges),
         },
       },
