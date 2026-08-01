@@ -1,0 +1,210 @@
+import type {
+  CatalogSearchV2ImageRow,
+  CatalogSearchV2ProductRow,
+  CatalogSearchV2VariantRow,
+} from "./catalog-search-v2-results";
+import {
+  containsAllSearchTokens,
+  type PreparedCatalogSearchQuery,
+} from "./catalog-search-v2";
+import { mapProductBadges } from "./product-badges";
+import { getProductNoveltyConfig, isProductNew } from "./product-novelty";
+import {
+  normalizeSearchCode,
+  normalizeSearchText,
+} from "./product-search-index";
+
+type ProductNoveltyConfig = Awaited<ReturnType<typeof getProductNoveltyConfig>>;
+
+export type CatalogSearchV2MatchedVariant = {
+  id: number;
+  name?: string | null;
+  moyskladId?: string | null;
+  price?: number | null;
+  priceOld?: number | null;
+  code?: string | null;
+  characteristics?: unknown;
+  image?: CatalogSearchV2ImageRow[] | null;
+};
+
+export type CatalogSearchV2ResponseAttributes = {
+  name?: string | null;
+  moyskladId?: string | null;
+  slug?: string | null;
+  price?: number | null;
+  priceOld?: number | null;
+  code?: string | null;
+  image: CatalogSearchV2ImageRow[] | null;
+  categoryName: string | null;
+  matchedVariant: CatalogSearchV2MatchedVariant | null;
+  isNew: boolean;
+  noveltyBadgeColor: string;
+  badges: ReturnType<typeof mapProductBadges>;
+};
+
+export type CatalogSearchV2ResponseItem = {
+  id: number;
+  attributes: CatalogSearchV2ResponseAttributes;
+};
+
+function buildSearchTextParts(...parts: Array<string | null | undefined>): string {
+  return parts.filter((part) => Boolean(part)).join(" ");
+}
+
+function buildVariantSearchText(variant: CatalogSearchV2VariantRow): string {
+  return buildSearchTextParts(
+    normalizeSearchText(variant.name),
+    normalizeSearchText(variant.code),
+    normalizeSearchCode(variant.code),
+  );
+}
+
+function isExactVariant(
+  variant: CatalogSearchV2VariantRow,
+  query: PreparedCatalogSearchQuery,
+): boolean {
+  if (query.normalizedText && normalizeSearchText(variant.name) === query.normalizedText) {
+    return true;
+  }
+
+  if (query.normalizedCode && normalizeSearchCode(variant.code) === query.normalizedCode) {
+    return true;
+  }
+
+  return false;
+}
+
+function isParentMatched(
+  product: CatalogSearchV2ProductRow,
+  query: PreparedCatalogSearchQuery,
+): boolean {
+  const normalizedParentName = normalizeSearchText(product.name);
+  const normalizedParentCode = normalizeSearchCode(product.code);
+  const parentSearchText = buildSearchTextParts(
+    normalizeSearchText(product.name),
+    normalizeSearchText(product.code),
+    normalizeSearchCode(product.code),
+  );
+
+  if (query.normalizedText && normalizedParentName === query.normalizedText) {
+    return true;
+  }
+
+  if (query.normalizedCode && normalizedParentCode === query.normalizedCode) {
+    return true;
+  }
+
+  if (query.normalizedText && normalizedParentName.includes(query.normalizedText)) {
+    return true;
+  }
+
+  if (query.normalizedCode && parentSearchText.includes(query.normalizedCode)) {
+    return true;
+  }
+
+  if (containsAllSearchTokens(parentSearchText, query.tokens)) {
+    return true;
+  }
+
+  return false;
+}
+
+function isPartialVariant(
+  variantSearchText: string,
+  query: PreparedCatalogSearchQuery,
+): boolean {
+  if (query.normalizedText && variantSearchText.includes(query.normalizedText)) {
+    return true;
+  }
+
+  if (query.normalizedCode && variantSearchText.includes(query.normalizedCode)) {
+    return true;
+  }
+
+  if (containsAllSearchTokens(variantSearchText, query.tokens)) {
+    return true;
+  }
+
+  return false;
+}
+
+function findMatchedVariant(
+  product: CatalogSearchV2ProductRow,
+  query: PreparedCatalogSearchQuery,
+): CatalogSearchV2VariantRow | null {
+  const variants = product.variants ?? [];
+
+  if (variants.length === 0) {
+    return null;
+  }
+
+  const exactVariant = variants.find((variant) => isExactVariant(variant, query));
+
+  if (exactVariant) {
+    return exactVariant;
+  }
+
+  if (isParentMatched(product, query)) {
+    return null;
+  }
+
+  const partialVariant = variants.find((variant) =>
+    isPartialVariant(buildVariantSearchText(variant), query),
+  );
+
+  return partialVariant ?? null;
+}
+
+function mapMatchedVariant(variant: CatalogSearchV2VariantRow): CatalogSearchV2MatchedVariant {
+  return {
+    id: variant.id,
+    name: variant.name ?? null,
+    moyskladId: variant.moyskladId ?? null,
+    price: variant.price ?? null,
+    priceOld: variant.priceOld ?? null,
+    code: variant.code ?? null,
+    characteristics: variant.characteristics ?? null,
+    image: variant.image ?? null,
+  };
+}
+
+function resolveSearchImage(product: CatalogSearchV2ProductRow): CatalogSearchV2ImageRow[] | null {
+  const parentImage = product.image ?? null;
+  const parentHasImages = Array.isArray(parentImage) && parentImage.length > 0;
+  const variants = product.variants ?? [];
+
+  const fallbackVariantWithImage = variants.find(
+    (variant) => Array.isArray(variant.image) && variant.image.length > 0,
+  );
+
+  return parentHasImages ? parentImage : (fallbackVariantWithImage?.image ?? null);
+}
+
+export function mapCatalogSearchV2Rows(
+  rows: CatalogSearchV2ProductRow[],
+  query: PreparedCatalogSearchQuery,
+  noveltyConfig: ProductNoveltyConfig,
+): CatalogSearchV2ResponseItem[] {
+  return rows.map((product) => {
+    const matchedVariant = findMatchedVariant(product, query);
+    const searchImage = resolveSearchImage(product);
+
+    return {
+      id: product.id,
+      attributes: {
+        name: product.name ?? null,
+        moyskladId: product.moyskladId ?? null,
+        slug: product.slug ?? null,
+        price: product.price ?? null,
+        priceOld: product.priceOld ?? null,
+        code: product.code ?? null,
+        image: searchImage,
+        categoryName: product.category?.name ?? null,
+        matchedVariant: matchedVariant ? mapMatchedVariant(matchedVariant) : null,
+        isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
+        noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+        badges: mapProductBadges(product.badges),
+      },
+    };
+  });
+}
