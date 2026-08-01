@@ -20,6 +20,8 @@ export type CatalogSearchCandidate = {
   searchCodes?: string | null;
 };
 
+const CATALOG_SEARCH_RESULT_LIMIT = 10;
+
 function uniqueTokensInOrder(tokens: string[]): string[] {
   const result: string[] = [];
   const seen = new Set<string>();
@@ -129,4 +131,26 @@ export function rankCatalogSearchCandidates(
 
     return right.id - left.id;
   });
+}
+
+export function selectTopCatalogSearchCandidates(
+  candidates: CatalogSearchCandidate[],
+  query: PreparedCatalogSearchQuery,
+): CatalogSearchCandidate[] {
+  const scoredCandidates = candidates.map((candidate) => ({
+    candidate,
+    score: scoreCatalogSearchCandidate(candidate, query),
+  }));
+
+  return scoredCandidates
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      return right.candidate.id - left.candidate.id;
+    })
+    .slice(0, CATALOG_SEARCH_RESULT_LIMIT)
+    .map(({ candidate }) => candidate);
 }
