@@ -7,13 +7,6 @@ import {
   isProductNew,
   type ProductNoveltyConfig,
 } from "../../../utils/product-novelty";
-import {
-  getSearchTokens,
-  normalizeSearchCode,
-  normalizeSearchText,
-  pickMatchedVariantIndex,
-  scoreSearchEntity,
-} from "../../../utils/catalog-search";
 import syncServiceFactory from "../services/sync";
 
 function isSyncLockError(err: unknown): boolean {
@@ -307,130 +300,6 @@ const PRODUCT_BADGES_POPULATE = {
     },
   },
 } as const;
-
-const SEARCH_RESULT_LIMIT = 10;
-const SEARCH_CANDIDATE_LIMIT = 100;
-const SEARCH_EXACT_LIMIT = 20;
-const SEARCH_MAX_QUERY_LENGTH = 120;
-
-const SEARCH_PRODUCT_SELECT = [
-  "id",
-  "name",
-  "moyskladId",
-  "slug",
-  "price",
-  "priceOld",
-  "code",
-  "moyskladNoveltyAt",
-] as const;
-
-const SEARCH_PRODUCT_POPULATE = {
-  image: { select: ["url", "alternativeText", "formats"] },
-  category: { select: ["name"] },
-  variants: {
-    select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
-    populate: {
-      image: { select: ["url", "alternativeText", "formats"] },
-    },
-    orderBy: { id: "asc" },
-  },
-  ...PRODUCT_BADGES_POPULATE,
-} as const;
-
-type ScoredSearchProduct = {
-  product: ProductRow;
-  productScore: number;
-  matchedVariant: VariantRow | null;
-};
-
-function buildCatalogSearchWhere(searchFilter: Record<string, unknown>) {
-  return {
-    $and: [
-      getStorefrontVisibleProductFilter(),
-      { category: { id: { $notIn: [CATALOG_ROOT_PARENT_ID] } } },
-      searchFilter,
-    ],
-  };
-}
-
-function buildSearchFieldContainsFilter(token: string) {
-  return {
-    $or: [
-      { name: { $containsi: token } },
-      { code: { $containsi: token } },
-      { variants: { name: { $containsi: token } } },
-      { variants: { code: { $containsi: token } } },
-    ],
-  };
-}
-
-function buildExactSearchFilter(q: string) {
-  return {
-    $or: [
-      { name: { $eqi: q } },
-      { code: { $eqi: q } },
-      { variants: { name: { $eqi: q } } },
-      { variants: { code: { $eqi: q } } },
-    ],
-  };
-}
-
-function buildCandidateSearchFilter(q: string, tokens: string[]) {
-  const conditions: Record<string, unknown>[] = [buildSearchFieldContainsFilter(q)];
-
-  if (tokens.length > 0) {
-    conditions.push({
-      $and: tokens.map((token) => buildSearchFieldContainsFilter(token)),
-    });
-  }
-
-  return { $or: conditions };
-}
-
-function mapSearchProductToResponseItem(
-  product: ProductRow,
-  matchedVariant: VariantRow | null,
-  noveltyConfig: ProductNoveltyConfig,
-) {
-  const variants = product.variants ?? [];
-  const parentImage = product.image ?? null;
-  const parentHasImages = Array.isArray(parentImage) && parentImage.length > 0;
-
-  const fallbackVariantWithImage = variants.find(
-    (variant) => Array.isArray(variant.image) && variant.image.length > 0,
-  );
-
-  const searchImage = parentHasImages ? parentImage : (fallbackVariantWithImage?.image ?? null);
-
-  return {
-    id: product.id,
-    attributes: {
-      name: product.name ?? null,
-      moyskladId: product.moyskladId ?? null,
-      slug: product.slug ?? null,
-      price: product.price ?? null,
-      priceOld: product.priceOld ?? null,
-      code: product.code ?? null,
-      image: searchImage,
-      categoryName: product.category?.name ?? null,
-      matchedVariant: matchedVariant
-        ? {
-            id: matchedVariant.id,
-            name: matchedVariant.name ?? null,
-            moyskladId: matchedVariant.moyskladId ?? null,
-            price: matchedVariant.price ?? null,
-            priceOld: matchedVariant.priceOld ?? null,
-            code: matchedVariant.code ?? null,
-            characteristics: matchedVariant.characteristics ?? null,
-            image: matchedVariant.image ?? null,
-          }
-        : null,
-      isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
-      noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
-      badges: mapProductBadges(product.badges),
-    },
-  };
-}
 
 const COLLECTION_PRODUCT_POPULATE = {
   image: { select: ["url", "alternativeText", "formats"] },
@@ -1136,111 +1005,122 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
    * Скрытые товары (isHiddenOnSite = true) исключаются из выдачи.
    */
   async search(ctx) {
-    let q = String(ctx.query.q ?? "").trim();
+    const q = String(ctx.query.q ?? "").trim();
 
     if (q.length < 2) {
       ctx.body = { items: [] };
       return;
     }
 
-    if (q.length > SEARCH_MAX_QUERY_LENGTH) {
-      q = q.slice(0, SEARCH_MAX_QUERY_LENGTH);
-    }
-
-    const normalizedQuery = normalizeSearchText(q);
-    const compactQuery = normalizeSearchCode(q);
-    const tokens = getSearchTokens(q);
-
+    const normalizedQuery = q.toLocaleLowerCase("ru");
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
     const noveltyConfig = await getProductNoveltyConfig(strapi);
 
-    const sharedQueryOptions = {
-      select: [...SEARCH_PRODUCT_SELECT],
-      populate: SEARCH_PRODUCT_POPULATE,
-      orderBy: { id: "desc" as const },
-    };
-
-    const [exactRows, candidateRows] = await Promise.all([
-      productQuery.findMany({
-        ...sharedQueryOptions,
-        where: buildCatalogSearchWhere(buildExactSearchFilter(q)),
-        limit: SEARCH_EXACT_LIMIT,
-      }),
-      productQuery.findMany({
-        ...sharedQueryOptions,
-        where: buildCatalogSearchWhere(buildCandidateSearchFilter(q, tokens)),
-        limit: SEARCH_CANDIDATE_LIMIT,
-      }),
-    ]);
-
-    const productsById = new Map<number, ProductRow>();
-
-    for (const product of exactRows as ProductRow[]) {
-      productsById.set(product.id, product);
-    }
-
-    for (const product of candidateRows as ProductRow[]) {
-      productsById.set(product.id, product);
-    }
-
-    const scoredProducts: ScoredSearchProduct[] = Array.from(productsById.values()).map((product) => {
-      const parentScore = scoreSearchEntity({
-        name: product.name,
-        code: product.code,
-        normalizedQuery,
-        compactQuery,
-        tokens,
-      });
-
-      const variants = product.variants ?? [];
-      let bestVariantScore = 0;
-
-      for (const variant of variants) {
-        const variantScore = scoreSearchEntity({
-          name: variant.name,
-          code: variant.code,
-          normalizedQuery,
-          compactQuery,
-          tokens,
-          isVariant: true,
-        });
-
-        if (variantScore > bestVariantScore) {
-          bestVariantScore = variantScore;
-        }
-      }
-
-      const productScore = Math.max(parentScore, bestVariantScore);
-
-      const matchedVariantIndex = pickMatchedVariantIndex({
-        variants,
-        parentScore,
-        normalizedQuery,
-        compactQuery,
-        tokens,
-      });
-
-      const matchedVariant =
-        matchedVariantIndex === null ? null : (variants[matchedVariantIndex] ?? null);
-
-      return { product, productScore, matchedVariant };
+    const rows: ProductRow[] = await productQuery.findMany({
+      where: {
+        $and: [
+          {
+            $or: [
+              { name: { $containsi: q } },
+              { code: { $containsi: q } },
+              { variants: { name: { $containsi: q } } },
+              { variants: { code: { $containsi: q } } },
+            ],
+          },
+          {
+            category: { id: { $notIn: [CATALOG_ROOT_PARENT_ID] } },
+          },
+          getStorefrontVisibleProductFilter(),
+        ],
+      },
+      select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "code", "moyskladNoveltyAt"],
+      populate: {
+        image: { select: ["url", "alternativeText", "formats"] },
+        category: { select: ["name"] },
+        variants: {
+          select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
+          populate: {
+            image: { select: ["url", "alternativeText", "formats"] },
+          },
+          orderBy: { id: "asc" },
+        },
+        ...PRODUCT_BADGES_POPULATE,
+      },
+      orderBy: { id: "desc" },
+      limit: 10,
     });
 
-    const resultProducts = scoredProducts
-      .filter((item) => item.productScore > 0)
-      .sort((a, b) => {
-        if (b.productScore !== a.productScore) {
-          return b.productScore - a.productScore;
+    ctx.body = {
+      items: rows.map((product) => {
+        const productName = product.name?.trim().toLocaleLowerCase("ru") ?? "";
+        const productCode = product.code?.trim().toLocaleLowerCase("ru") ?? "";
+
+        const productHasExactMatch = productName === normalizedQuery || productCode === normalizedQuery;
+        const productHasPartialMatch = productName.includes(normalizedQuery) || productCode.includes(normalizedQuery);
+
+        const variants = product.variants ?? [];
+
+        const exactVariant = variants.find((variant) => {
+          const variantName = variant.name?.trim().toLocaleLowerCase("ru") ?? "";
+          const variantCode = variant.code?.trim().toLocaleLowerCase("ru") ?? "";
+
+          return variantName === normalizedQuery || variantCode === normalizedQuery;
+        });
+
+        const partialVariant = variants.find((variant) => {
+          const variantName = variant.name?.trim().toLocaleLowerCase("ru") ?? "";
+          const variantCode = variant.code?.trim().toLocaleLowerCase("ru") ?? "";
+
+          return variantName.includes(normalizedQuery) || variantCode.includes(normalizedQuery);
+        });
+
+        let matchedVariant: VariantRow | null = null;
+
+        if (exactVariant) {
+          matchedVariant = exactVariant;
+        } else if (!productHasExactMatch && !productHasPartialMatch && partialVariant) {
+          matchedVariant = partialVariant;
         }
 
-        return b.product.id - a.product.id;
-      })
-      .slice(0, SEARCH_RESULT_LIMIT);
+        const parentImage = product.image ?? null;
+        const parentHasImages = Array.isArray(parentImage) && parentImage.length > 0;
 
-    ctx.body = {
-      items: resultProducts.map(({ product, matchedVariant }) =>
-        mapSearchProductToResponseItem(product, matchedVariant, noveltyConfig),
-      ),
+        const fallbackVariantWithImage = variants.find(
+          (variant) => Array.isArray(variant.image) && variant.image.length > 0,
+        );
+
+        const searchImage = parentHasImages ? parentImage : (fallbackVariantWithImage?.image ?? null);
+
+        return {
+          id: product.id,
+          attributes: {
+            name: product.name ?? null,
+            moyskladId: product.moyskladId ?? null,
+            slug: product.slug ?? null,
+            price: product.price ?? null,
+            priceOld: product.priceOld ?? null,
+            code: product.code ?? null,
+            image: searchImage,
+            categoryName: product.category?.name ?? null,
+            matchedVariant: matchedVariant
+              ? {
+                  id: matchedVariant.id,
+                  name: matchedVariant.name ?? null,
+                  moyskladId: matchedVariant.moyskladId ?? null,
+                  price: matchedVariant.price ?? null,
+                  priceOld: matchedVariant.priceOld ?? null,
+                  code: matchedVariant.code ?? null,
+                  characteristics: matchedVariant.characteristics ?? null,
+                  image: matchedVariant.image ?? null,
+                }
+              : null,
+            isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
+            noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+            badges: mapProductBadges(product.badges),
+          },
+        };
+      }),
     };
   },
 
