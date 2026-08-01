@@ -693,8 +693,6 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
 
-    const noveltyConfig = await getProductNoveltyConfig(strapi);
-
     ctx.body = {
       items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
       total,
