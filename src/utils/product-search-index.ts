@@ -26,8 +26,36 @@ export function normalizeSearchText(value: string | null | undefined): string {
     .trim();
 }
 
+const CYRILLIC_TO_LATIN_LOOKALIKES: Record<string, string> = {
+  а: "a",
+  в: "b",
+  с: "c",
+  е: "e",
+  н: "h",
+  к: "k",
+  м: "m",
+  о: "o",
+  р: "p",
+  т: "t",
+  х: "x",
+  у: "y",
+};
+
+function replaceCyrillicLookalikesWithLatin(value: string): string {
+  let result = "";
+
+  for (const char of value) {
+    result += CYRILLIC_TO_LATIN_LOOKALIKES[char] ?? char;
+  }
+
+  return result;
+}
+
 export function normalizeSearchCode(value: string | null | undefined): string {
-  return normalizeSearchText(value).replace(/\s+/g, "");
+  const normalized = normalizeSearchText(value);
+  const latinized = replaceCyrillicLookalikesWithLatin(normalized);
+
+  return latinized.replace(/\s+/g, "");
 }
 
 function addUniquePart(parts: string[], seen: Set<string>, value: string): void {
