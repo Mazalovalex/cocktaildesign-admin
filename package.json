@@ -16,6 +16,7 @@
     "upgrade:dry": "npx @strapi/upgrade latest --dry",
     "seed:spec-types": "node ./scripts/seed-specification-types.js",
     "backfill:moysklad-novelty": "node ./scripts/backfill-moysklad-novelty.js",
+    "backfill:product-search-index": "node ./scripts/backfill-product-search-index.js",
     "setup:novinki": "node ./scripts/setup-novinki.js"
   },
   "dependencies": {
