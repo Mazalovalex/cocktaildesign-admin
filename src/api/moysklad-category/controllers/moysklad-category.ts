@@ -1,6 +1,7 @@
 //backend/src/api/moysklad-category/controllers/moysklad-category.ts
 import { factories } from "@strapi/strapi";
 import { getStorefrontVisibleProductFilter } from "../../../utils/storefront-product-visibility";
+import { mapProductBadges } from "../../../utils/product-badges";
 import {
   getProductNoveltyConfig,
   isProductNew,
@@ -175,6 +176,7 @@ type ProductRow = {
   specifications?: ProductSpecificationRow[] | null;
   variants?: VariantRow[] | null;
   moyskladNoveltyAt?: string | null;
+  badges?: unknown;
 };
 
 function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
@@ -208,6 +210,7 @@ function mapCatalogProductPreviewItem(product: ProductRow, noveltyConfig: Produc
       variants: mapPreviewVariants((product as any).variants),
       isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
       noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+      badges: mapProductBadges(product.badges),
     },
   };
 }
@@ -288,6 +291,16 @@ const CATALOG_PREVIEW_PRODUCT_SELECT = [
   "moyskladNoveltyAt",
 ] as const;
 
+const PRODUCT_BADGES_POPULATE = {
+  badges: {
+    populate: {
+      badge: {
+        select: ["id", "label", "backgroundColor", "textColor"],
+      },
+    },
+  },
+} as const;
+
 const COLLECTION_PRODUCT_POPULATE = {
   image: { select: ["url", "alternativeText", "formats"] },
   category: { select: ["id", "name", "slug"] },
@@ -298,6 +311,7 @@ const COLLECTION_PRODUCT_POPULATE = {
     },
     orderBy: { id: "asc" },
   },
+  ...PRODUCT_BADGES_POPULATE,
 } as const;
 
 const NEW_COLLECTION_ORDER_BY = [
@@ -421,6 +435,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       limit: 100000,
     });
@@ -466,6 +481,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       limit: 100000,
     });
@@ -489,6 +505,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       limit: 100000,
     });
@@ -683,6 +700,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       orderBy: { id: "desc" },
       limit,
@@ -727,6 +745,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       orderBy: { id: "desc" },
       limit: 100000,
@@ -781,6 +800,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       limit: 100,
     });
@@ -861,6 +881,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             },
           },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
     });
 
@@ -957,6 +978,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           engravingEnabled: product.engravingEnabled ?? false,
           discountExcluded: product.discountExcluded ?? false,
           code: product.code ?? null,
+          badges: mapProductBadges(product.badges),
         },
       },
       variants,
@@ -1018,6 +1040,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       orderBy: { id: "desc" },
       limit: 10,
@@ -1089,6 +1112,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
               : null,
             isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
             noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+            badges: mapProductBadges(product.badges),
           },
         };
       }),
@@ -1135,6 +1159,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           },
           orderBy: { id: "asc" },
         },
+        ...PRODUCT_BADGES_POPULATE,
       },
       orderBy: { id: "asc" },
       limit: count,
@@ -1165,6 +1190,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             categoryName: (p as any).category?.name ?? null,
             isNew: isProductNew(p.moyskladNoveltyAt, noveltyConfig.noveltyDays),
             noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+            badges: mapProductBadges(p.badges),
           },
         };
       }),
