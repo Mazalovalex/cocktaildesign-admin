@@ -15,7 +15,8 @@
     "upgrade": "npx @strapi/upgrade latest",
     "upgrade:dry": "npx @strapi/upgrade latest --dry",
     "seed:spec-types": "node ./scripts/seed-specification-types.js",
-    "backfill:moysklad-novelty": "node ./scripts/backfill-moysklad-novelty.js"
+    "backfill:moysklad-novelty": "node ./scripts/backfill-moysklad-novelty.js",
+    "setup:novinki": "node ./scripts/setup-novinki.js"
   },
   "dependencies": {
     "@strapi/plugin-cloud": "5.36.0",
