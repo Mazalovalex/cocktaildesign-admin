@@ -79,6 +79,12 @@
     "moyskladNoveltyAt": {
       "type": "datetime"
     },
+    "searchText": {
+      "type": "text"
+    },
+    "searchCodes": {
+      "type": "text"
+    },
     "image": {
       "type": "media",
       "multiple": true,

@@ -810,6 +810,8 @@ export interface ApiMoyskladProductMoyskladProduct
     price: Schema.Attribute.Integer;
     priceOld: Schema.Attribute.Integer;
     publishedAt: Schema.Attribute.DateTime;
+    searchCodes: Schema.Attribute.Text;
+    searchText: Schema.Attribute.Text;
     slug: Schema.Attribute.String &
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
