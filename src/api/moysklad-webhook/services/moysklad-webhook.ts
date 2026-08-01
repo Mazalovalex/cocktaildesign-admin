@@ -1,6 +1,7 @@
 // backend/src/api/moysklad-webhook/services/moysklad-webhook.ts
 
 import type { MoySkladWebhookEvent } from "../../../utils/moysklad-mutation-queue";
+import { rebuildProductSearchIndex } from "../../../utils/rebuild-product-search-index";
 
 type MoySkladMeta = { href: string; type: string; mediaType?: string };
 
@@ -54,10 +55,27 @@ async function deleteLocalByWebhookType(type: string, moyskladId: string): Promi
   }
 
   if (type === "variant") {
+    const variant = await strapi.db.query("api::moysklad-variant.moysklad-variant").findOne({
+      where: { moyskladId },
+      select: ["id"],
+      populate: {
+        product: {
+          select: ["id"],
+        },
+      },
+    });
+
+    const productId = variant?.product?.id;
+
     await strapi.db.query("api::moysklad-variant.moysklad-variant").deleteMany({
       where: { moyskladId },
     });
     strapi.log.info(`[moysklad-webhook] deleted variant ${moyskladId}`);
+
+    if (Number.isInteger(productId) && productId > 0) {
+      await rebuildProductSearchIndex(strapi, productId);
+    }
+
     return;
   }
 
