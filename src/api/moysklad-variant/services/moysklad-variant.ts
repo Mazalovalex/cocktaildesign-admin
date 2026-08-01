@@ -7,6 +7,7 @@ import {
   getWebsitePrices,
   type MoySkladSalePrice,
 } from "../../../utils/moysklad-prices";
+import { rebuildProductSearchIndex } from "../../../utils/rebuild-product-search-index";
 
 type MoySkladMeta = { href?: string };
 
@@ -98,11 +99,12 @@ export default factories.createCoreService("api::moysklad-variant.moysklad-varia
     if (existing) {
       await variantQuery.update({ where: { id: existing.id }, data: payload });
       strapi.log.info(`[moysklad-variant] updated: ${moyskladId}`);
-      return;
+    } else {
+      await variantQuery.create({ data: payload });
+      strapi.log.info(`[moysklad-variant] created: ${moyskladId}`);
     }
 
-    await variantQuery.create({ data: payload });
-    strapi.log.info(`[moysklad-variant] created: ${moyskladId}`);
+    await rebuildProductSearchIndex(strapi, product.id);
   },
 
   /**
