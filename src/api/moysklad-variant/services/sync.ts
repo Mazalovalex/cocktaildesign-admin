@@ -25,6 +25,7 @@ import {
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
 import { enqueueMoySkladFullSync } from "../../../utils/moysklad-mutation-queue";
+import { rebuildAllProductSearchIndexes } from "../../../utils/rebuild-product-search-index";
 
 type MoySkladMeta = { href: string };
 
@@ -246,6 +247,12 @@ async function syncAllVariantsUnlocked(): Promise<{ upserted: number; skippedNoP
     await variantQuery.deleteMany({
       where: { moyskladId: { $notIn: Array.from(keepVariantMsIds) } },
     });
+
+    const searchIndexResult = await rebuildAllProductSearchIndexes(strapi);
+
+    strapi.log.info(
+      `[moysklad-variant] search index rebuilt: scanned=${searchIndexResult.scanned} changed=${searchIndexResult.changed} unchanged=${searchIndexResult.unchanged}`,
+    );
 
     const result = { upserted, skippedNoProduct };
 
