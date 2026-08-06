@@ -23,6 +23,16 @@ import {
 import { isOwnProductionMoySkladProduct } from "../../../utils/moysklad-own-production";
 import { getStorefrontVisibleProductFilter } from "../../../utils/storefront-product-visibility";
 import { rebuildProductSearchIndex } from "../../../utils/rebuild-product-search-index";
+import {
+  SAMPLE_SALE_FOLDER_ID,
+  buildClearedSampleSaleStockFields,
+  buildSampleSaleStockFields,
+  buildSampleSaleStockMap,
+  fetchSampleSaleAssortment,
+  fetchSampleSaleAssortmentItemById,
+  isSampleSaleFolderId,
+  type SampleSaleAssortmentItem,
+} from "../../../utils/moysklad-sample-sale";
 
 import { syncBundleItemsForBundle } from "../../moysklad-bundle-item/services/sync";
 
@@ -133,6 +143,109 @@ function pickIdFromHref(href?: string): string | null {
  */
 function makeStableSlug(moyskladId: string): string {
   return `ms-${moyskladId.slice(0, 8)}`;
+}
+
+/** Общая часть payload для product и bundle из MoySklad и webhook. */
+type MoySkladOwnedSource = {
+  name?: string;
+  code?: string;
+  updated?: string;
+  description?: string;
+  salePrices?: MoySkladSalePrice[];
+  uom?: { name?: string };
+  weight?: number | null;
+  volume?: number | null;
+};
+
+type ProductPayloadParams = {
+  type: "product" | "bundle";
+  moyskladId: string;
+  href: string;
+  categoryId: number;
+};
+
+/**
+ * Поля, владельцем которых является MoySklad.
+ *
+ * Сюда НЕ входят ручные поля Strapi: image, badges, isHiddenOnSite, lockImages,
+ * discountExcluded, specifications, composition, catalog_collections,
+ * а также displayTitle / description / slug, которые менеджер правит вручную.
+ */
+function buildMoySkladOwnedProductFields(
+  source: MoySkladOwnedSource,
+  params: ProductPayloadParams,
+): Record<string, unknown> {
+  const websitePrices = getWebsitePrices(source.salePrices);
+
+  return {
+    type: params.type,
+    name: source.name ?? "",
+    moyskladId: params.moyskladId,
+    href: params.href,
+    code: source.code ?? null,
+    updated: source.updated ?? null,
+    category: params.categoryId,
+    price: websitePrices.price,
+    priceOld: websitePrices.priceOld,
+    uom: source.uom?.name ?? null,
+    weight: typeof source.weight === "number" ? source.weight : null,
+    volume: typeof source.volume === "number" ? source.volume : null,
+  };
+}
+
+/**
+ * Полный payload синхронизации: поля MoySklad + displayTitle/description/slug.
+ * Используется при create и при обычном (не Sample Sale) update.
+ */
+function buildFullProductPayload(
+  source: MoySkladOwnedSource,
+  params: ProductPayloadParams & { nowIso: string; canWriteSlug: boolean },
+): Record<string, unknown> {
+  const payload = buildMoySkladOwnedProductFields(source, params);
+
+  payload.displayTitle = source.name ?? "";
+  payload.description = typeof source.description === "string" ? source.description : null;
+  payload.publishedAt = params.nowIso;
+
+  if (params.canWriteSlug) {
+    payload.slug = makeStableSlug(params.moyskladId);
+  }
+
+  return payload;
+}
+
+/**
+ * Скрывает ранее импортированный товар Sample Sale вместо физического удаления.
+ * Возвращает true, если товар относится к папке Sample Sale.
+ */
+async function hideSampleSaleProductIfNeeded(moyskladId: string): Promise<boolean> {
+  const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
+
+  const product = await productQuery.findOne({
+    where: { moyskladId, type: "product" },
+    select: ["id", "isOutOfStock"],
+    populate: {
+      category: { select: ["moyskladId"] },
+    },
+  });
+
+  const categoryMsId =
+    (product as { category?: { moyskladId?: string | null } | null } | null)?.category
+      ?.moyskladId ?? null;
+
+  if (!product || !isSampleSaleFolderId(categoryMsId)) {
+    return false;
+  }
+
+  if (product.isOutOfStock !== true) {
+    await productQuery.update({
+      where: { id: product.id },
+      data: { isOutOfStock: true },
+    });
+  }
+
+  strapi.log.info(`[moysklad-sample-sale] record preserved and hidden: ${moyskladId}`);
+  return true;
 }
 
 /**
@@ -476,6 +589,11 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     const categoryMsId = pickIdFromHref(entity.productFolder?.meta?.href);
     if (!categoryMsId) {
       strapi.log.warn(`[moysklad-product] webhook skipped: no category for product=${moyskladId}`);
+      // Товар Sample Sale не удаляем и не теряем — только скрываем.
+      if (await hideSampleSaleProductIfNeeded(moyskladId)) {
+        await recomputeCategoryCountsFromDb();
+        return;
+      }
       // Товар перенесли без папки / вне ожидаемой структуры — убираем из подборки.
       await removeProductFromOwnProductionCollectionByMoyskladId(moyskladId);
       return;
@@ -488,6 +606,11 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     if (!category) {
       strapi.log.warn(`[moysklad-product] webhook skipped: category not found msId=${categoryMsId}`);
+      // Товар Sample Sale переместили в неразрешённую папку — сохраняем и скрываем.
+      if (await hideSampleSaleProductIfNeeded(moyskladId)) {
+        await recomputeCategoryCountsFromDb();
+        return;
+      }
       // Папка вне витринного дерева — товар в Strapi не обновляем, но из подборки убираем.
       await removeProductFromOwnProductionCollectionByMoyskladId(moyskladId);
       return;
@@ -495,54 +618,116 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
     const existing = await productQuery.findOne({
       where: { moyskladId },
-      select: ["id", "documentId"],
+      select: ["id", "documentId", "moyskladStock", "isOutOfStock"],
     });
 
     const nowIso = new Date().toISOString();
     const canWriteSlug = hasProductAttribute("slug");
-    const websitePrices = getWebsitePrices(entity.salePrices);
 
-    const payload: Record<string, unknown> = {
-      type: "product",
-      name: entity.name ?? "",
-      displayTitle: entity.name ?? "",
-      description: typeof entity.description === "string" ? entity.description : null,
+    const payloadParams = {
+      type: "product" as const,
       moyskladId,
       href,
-      code: entity.code ?? null,
-      updated: entity.updated ?? null,
-      category: category.id,
-      price: websitePrices.price,
-      priceOld: websitePrices.priceOld,
-      uom: entity.uom?.name ?? null,
-      weight: typeof entity.weight === "number" ? entity.weight : null,
-      volume: typeof entity.volume === "number" ? entity.volume : null,
-      publishedAt: nowIso,
+      categoryId: category.id,
     };
-
-    if (canWriteSlug) {
-      payload.slug = makeStableSlug(moyskladId);
-    }
 
     let productDocumentId: string | null = null;
     let savedProductId: number;
 
-    if (existing) {
-      await productQuery.update({ where: { id: existing.id }, data: payload });
-      savedProductId = existing.id;
-      productDocumentId =
-        typeof (existing as { documentId?: unknown }).documentId === "string"
-          ? (existing as { documentId: string }).documentId
-          : null;
-      strapi.log.info(`[moysklad-product] updated: ${moyskladId}`);
+    if (isSampleSaleFolderId(categoryMsId)) {
+      // Остаток берём точечным GET. Ошибка запроса не должна менять запись.
+      let stockItem: SampleSaleAssortmentItem | null;
+
+      try {
+        stockItem = await fetchSampleSaleAssortmentItemById(moyskladId);
+      } catch (err) {
+        strapi.log.error(
+          `[moysklad-sample-sale] webhook stock fetch failed: product=${moyskladId} error=${String(err)}`,
+        );
+        return;
+      }
+
+      if (!stockItem) {
+        strapi.log.warn(
+          `[moysklad-sample-sale] webhook skipped: no stock row for product=${moyskladId}`,
+        );
+        return;
+      }
+
+      // Архивный товар недоступен независимо от остатка.
+      const hidden =
+        buildSampleSaleStockFields(stockItem.stock).isOutOfStock || entity.archived === true;
+      const stockFields = { moyskladStock: stockItem.stock, isOutOfStock: hidden };
+
+      if (!existing) {
+        if (hidden) {
+          strapi.log.info(
+            `[moysklad-sample-sale] webhook create skipped (no stock): ${moyskladId}`,
+          );
+          return;
+        }
+
+        const created = await productQuery.create({
+          data: {
+            ...buildFullProductPayload(entity, { ...payloadParams, nowIso, canWriteSlug }),
+            ...stockFields,
+          },
+        });
+        savedProductId = created.id;
+        productDocumentId =
+          typeof (created as { documentId?: unknown }).documentId === "string"
+            ? (created as { documentId: string }).documentId
+            : null;
+        strapi.log.info(`[moysklad-sample-sale] webhook created: ${moyskladId}`);
+      } else {
+        // Недоступен — трогаем только системные поля, ручные данные сохраняем.
+        const data = hidden
+          ? { ...stockFields }
+          : { ...buildMoySkladOwnedProductFields(entity, payloadParams), ...stockFields };
+
+        await productQuery.update({ where: { id: existing.id }, data });
+        savedProductId = existing.id;
+        productDocumentId =
+          typeof (existing as { documentId?: unknown }).documentId === "string"
+            ? (existing as { documentId: string }).documentId
+            : null;
+        strapi.log.info(
+          `[moysklad-sample-sale] webhook ${hidden ? "hidden" : "updated"}: ${moyskladId}`,
+        );
+      }
     } else {
-      const created = await productQuery.create({ data: payload });
-      savedProductId = created.id;
-      productDocumentId =
-        typeof (created as { documentId?: unknown }).documentId === "string"
-          ? (created as { documentId: string }).documentId
-          : null;
-      strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
+      const payload = buildFullProductPayload(entity, {
+        ...payloadParams,
+        nowIso,
+        canWriteSlug,
+      });
+
+      // Товар вернулся из Sample Sale в обычную категорию — снимаем stock-контроль.
+      const hadStockFields =
+        Boolean(existing) &&
+        ((existing.moyskladStock ?? null) !== null || (existing.isOutOfStock ?? null) !== null);
+
+      if (hadStockFields) {
+        Object.assign(payload, buildClearedSampleSaleStockFields());
+      }
+
+      if (existing) {
+        await productQuery.update({ where: { id: existing.id }, data: payload });
+        savedProductId = existing.id;
+        productDocumentId =
+          typeof (existing as { documentId?: unknown }).documentId === "string"
+            ? (existing as { documentId: string }).documentId
+            : null;
+        strapi.log.info(`[moysklad-product] updated: ${moyskladId}`);
+      } else {
+        const created = await productQuery.create({ data: payload });
+        savedProductId = created.id;
+        productDocumentId =
+          typeof (created as { documentId?: unknown }).documentId === "string"
+            ? (created as { documentId: string }).documentId
+            : null;
+        strapi.log.info(`[moysklad-product] created: ${moyskladId}`);
+      }
     }
 
     await rebuildProductSearchIndex(strapi, savedProductId);
@@ -651,6 +836,12 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
     const variantQuery = strapi.db.query("api::moysklad-variant.moysklad-variant");
 
+    // Товары Sample Sale физически не удаляем: сохраняем фото, бейджи и ручные поля.
+    if (await hideSampleSaleProductIfNeeded(moyskladId)) {
+      await recomputeCategoryCountsFromDb();
+      return;
+    }
+
     const existingProduct = await productQuery.findOne({
       where: {
         moyskladId,
@@ -723,6 +914,30 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         categories.map((c) => [c.moyskladId, c.id]),
       );
 
+      // --- 1a) Категория Sample Sale обязательна ---
+      //
+      // Через связь с ней определяются защищённые товары. Без неё sync не имеет
+      // права работать: иначе товары Sample Sale останутся без stock-контроля
+      // и без защиты от cleanup.
+      if (!allowedCategoryMsIds.has(SAMPLE_SALE_FOLDER_ID)) {
+        throw new Error(
+          "MoySklad product sync aborted: Sample Sale category is missing in Strapi " +
+            `(moyskladId=${SAMPLE_SALE_FOLDER_ID}). Run the category sync first.`,
+        );
+      }
+
+      // --- 1b) Остатки Sample Sale: грузим ДО любых записей в базу ---
+      //
+      // Ошибка запроса, пустой ответ, дубли, чужая папка или битый stock
+      // останавливают sync ещё до create/update/delete.
+      // Отсутствующий stock нельзя считать нулём.
+      const sampleSaleAssortment = await fetchSampleSaleAssortment();
+      const sampleSaleStockByMsId = buildSampleSaleStockMap(sampleSaleAssortment);
+
+      strapi.log.info(
+        `[moysklad-sample-sale] stock loaded before writes: rows=${sampleSaleStockByMsId.size}`,
+      );
+
       // --- 2) Тянем все products из MoySklad (пагинация) ---
 
       const allProducts: MoySkladProductOrBundle[] = [];
@@ -755,6 +970,26 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       strapi.log.info(`[moysklad] fetched: products=${allProducts.length} bundles=${allBundles.length}`);
 
+      // --- 3a) Полнота остатков: проверяем ДО первой записи в базу ---
+      //
+      // Товар лежит в папке Sample Sale, но строки в ассортименте нет — это
+      // расхождение данных, а не нулевой остаток. Скрывать товар по такому
+      // признаку нельзя, поэтому останавливаемся до create/update/cleanup.
+      const missingStockMsIds = allProducts
+        .filter(
+          (p) =>
+            isSampleSaleFolderId(pickIdFromHref(p.productFolder?.meta?.href)) &&
+            !sampleSaleStockByMsId.has(p.id),
+        )
+        .map((p) => p.id);
+
+      if (missingStockMsIds.length > 0) {
+        throw new Error(
+          `MoySklad product sync aborted: no stock row for ${missingStockMsIds.length} ` +
+            `Sample Sale product(s), first=${missingStockMsIds[0]}`,
+        );
+      }
+
       // --- 4) Загружаем все существующие записи из Strapi ОДНИМ запросом ---
       //
       // ✅ ИСПРАВЛЕНИЕ N+1:
@@ -763,11 +998,21 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       // При 1000 товарах = 1 запрос вместо 1000.
 
       const existingRows = await productQuery.findMany({
-        select: ["id", "moyskladId", "type"],
+        select: ["id", "moyskladId", "type", "moyskladStock", "isOutOfStock"],
+        populate: {
+          category: { select: ["moyskladId"] },
+        },
         limit: 200000,
       });
 
-      type ExistingProductRow = { id: number; moyskladId: string; type?: string };
+      type ExistingProductRow = {
+        id: number;
+        moyskladId: string;
+        type?: string;
+        moyskladStock?: number | null;
+        isOutOfStock?: boolean | null;
+        category?: { moyskladId?: string | null } | null;
+      };
 
       // Map: moyskladId → Strapi numeric id
       const existingIdByMsId = new Map<string, number>(
@@ -776,11 +1021,45 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           .map((r) => [r.moyskladId, r.id]),
       );
 
+      // Состояние записи на момент старта sync (нужно для stock-полей и статистики)
+      const existingByMsId = new Map<string, ExistingProductRow>(
+        (existingRows as ExistingProductRow[])
+          .filter((r) => r.moyskladId)
+          .map((r) => [r.moyskladId, r]),
+      );
+
+      // Ранее импортированные товары Sample Sale — определяем по категории, не по имени
+      const previousSampleSaleMsIds = new Set<string>(
+        (existingRows as ExistingProductRow[])
+          .filter(
+            (r) =>
+              Boolean(r.moyskladId) &&
+              r.type === "product" &&
+              isSampleSaleFolderId(r.category?.moyskladId ?? null),
+          )
+          .map((r) => r.moyskladId),
+      );
+
       const nowIso = new Date().toISOString();
 
       const keepMsIds = new Set<string>();       // витринные products
       const keepBundleMsIds = new Set<string>(); // витринные bundles
       const ownProductionMsIds = new Set<string>(); // кандидаты в «Наше производство»
+
+      // moyskladId, обработанные в разрешённой категории в этом прогоне.
+      // Нужны, чтобы не пометить isOutOfStock товар, который уже переехал
+      // из Sample Sale в обычную категорию.
+      const processedAllowedProductIds = new Set<string>();
+
+      const sampleSaleStats = {
+        total: 0,
+        created: 0,
+        updated: 0,
+        skippedOutOfStock: 0,
+        markedOutOfStock: 0,
+        reactivated: 0,
+        preservedMissing: 0,
+      };
 
       // --- 5) Upsert products ---
 
@@ -796,40 +1075,113 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         const categoryId = categoryIdByMsId.get(categoryMsId);
         if (!categoryId) continue;
 
-        keepMsIds.add(p.id);
+        const existingStrapiId = existingIdByMsId.get(p.id);
 
-        const websitePrices = getWebsitePrices(p.salePrices);
-
-        const payload: Record<string, unknown> = {
-          type: "product",
-          name: p.name,
-          displayTitle: p.name,
-          description: typeof p.description === "string" ? p.description : null,
+        const payloadParams = {
+          type: "product" as const,
           moyskladId: p.id,
           href: p.meta.href,
-          code: p.code ?? null,
-          updated: p.updated ?? null,
-          category: categoryId,
-          price: websitePrices.price,
-          priceOld: websitePrices.priceOld,
-          uom: p.uom?.name ?? null,
-          weight: typeof p.weight === "number" ? p.weight : null,
-          volume: typeof p.volume === "number" ? p.volume : null,
-          publishedAt: nowIso,
+          categoryId,
         };
 
-        if (canWriteSlug) {
-          payload.slug = makeStableSlug(p.id);
+        // --- 5a) Sample Sale: остаток управляет видимостью, но не удалением ---
+        if (isSampleSaleFolderId(categoryMsId)) {
+          sampleSaleStats.total += 1;
+
+          // Запись защищена от cleanup независимо от остатка.
+          keepMsIds.add(p.id);
+          processedAllowedProductIds.add(p.id);
+
+          // Полнота Map проверена до цикла — здесь строка обязана существовать.
+          const stockRow = sampleSaleStockByMsId.get(p.id);
+          if (!stockRow) {
+            throw new Error(`MoySklad product sync aborted: missing stock row for ${p.id}`);
+          }
+
+          const stock = stockRow.stock;
+          // Архивный товар недоступен независимо от остатка.
+          const hidden = buildSampleSaleStockFields(stock).isOutOfStock || p.archived === true;
+          const stockFields = { moyskladStock: stock, isOutOfStock: hidden };
+          const wasOutOfStock = existingByMsId.get(p.id)?.isOutOfStock === true;
+
+          if (!existingStrapiId) {
+            if (hidden) {
+              sampleSaleStats.skippedOutOfStock += 1;
+              continue;
+            }
+
+            await productQuery.create({
+              data: {
+                ...buildFullProductPayload(p, { ...payloadParams, nowIso, canWriteSlug }),
+                ...stockFields,
+              },
+            });
+            sampleSaleStats.created += 1;
+            continue;
+          }
+
+          // Недоступен — пишем только системные поля, ручные данные не трогаем.
+          const data = hidden
+            ? { ...stockFields }
+            : { ...buildMoySkladOwnedProductFields(p, payloadParams), ...stockFields };
+
+          await productQuery.update({ where: { id: existingStrapiId }, data });
+          sampleSaleStats.updated += 1;
+
+          if (hidden && !wasOutOfStock) {
+            sampleSaleStats.markedOutOfStock += 1;
+          }
+
+          if (!hidden && wasOutOfStock) {
+            sampleSaleStats.reactivated += 1;
+          }
+
+          continue;
+        }
+
+        // --- 5b) Обычные товары: поведение не меняется ---
+        keepMsIds.add(p.id);
+        processedAllowedProductIds.add(p.id);
+
+        const payload = buildFullProductPayload(p, { ...payloadParams, nowIso, canWriteSlug });
+
+        // Товар переехал из Sample Sale в обычную категорию — снимаем stock-контроль.
+        const previous = existingByMsId.get(p.id);
+        const hadStockFields =
+          Boolean(previous) &&
+          ((previous?.moyskladStock ?? null) !== null ||
+            (previous?.isOutOfStock ?? null) !== null);
+
+        if (hadStockFields) {
+          Object.assign(payload, buildClearedSampleSaleStockFields());
         }
 
         // ✅ O(1) lookup вместо запроса в БД
-        const existingStrapiId = existingIdByMsId.get(p.id);
-
         if (existingStrapiId) {
           await productQuery.update({ where: { id: existingStrapiId }, data: payload });
         } else {
           await productQuery.create({ data: payload });
         }
+      }
+
+      // --- 5c) Товары Sample Sale, которых нет в текущей выборке ---
+      //
+      // Перемещены в неразрешённую папку, удалены или архивированы в MoySklad.
+      // Запись сохраняем и скрываем: фотографии и ручные поля не теряем.
+      for (const msId of previousSampleSaleMsIds) {
+        if (processedAllowedProductIds.has(msId)) continue;
+
+        keepMsIds.add(msId);
+        sampleSaleStats.preservedMissing += 1;
+
+        const row = existingByMsId.get(msId);
+        if (!row || row.isOutOfStock === true) continue;
+
+        await productQuery.update({
+          where: { id: row.id },
+          data: { isOutOfStock: true },
+        });
+        sampleSaleStats.markedOutOfStock += 1;
       }
 
       // --- 6) Upsert bundles ---
@@ -844,32 +1196,27 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         const categoryId = categoryIdByMsId.get(categoryMsId);
         if (!categoryId) continue;
 
+        // В Sample Sale контроль остатка реализован только для product.
+        // Комплекты оттуда не создаём; уже существующие защищаем от удаления.
+        if (isSampleSaleFolderId(categoryMsId)) {
+          if (existingIdByMsId.has(b.id)) {
+            keepBundleMsIds.add(b.id);
+          }
+          strapi.log.warn(`[moysklad-sample-sale] bundle skipped (unsupported): ${b.id}`);
+          continue;
+        }
+
         bundlesAllowed += 1;
         keepBundleMsIds.add(b.id);
 
-        const websitePrices = getWebsitePrices(b.salePrices);
-
-        const payload: Record<string, unknown> = {
+        const payload = buildFullProductPayload(b, {
           type: "bundle",
-          name: b.name,
-          displayTitle: b.name,
-          description: typeof b.description === "string" ? b.description : null,
           moyskladId: b.id,
           href: b.meta.href,
-          code: b.code ?? null,
-          updated: b.updated ?? null,
-          category: categoryId,
-          price: websitePrices.price,
-          priceOld: websitePrices.priceOld,
-          uom: b.uom?.name ?? null,
-          weight: typeof b.weight === "number" ? b.weight : null,
-          volume: typeof b.volume === "number" ? b.volume : null,
-          publishedAt: nowIso,
-        };
-
-        if (canWriteSlug) {
-          payload.slug = makeStableSlug(b.id);
-        }
+          categoryId,
+          nowIso,
+          canWriteSlug,
+        });
 
         // ✅ O(1) lookup вместо запроса в БД
         const existingStrapiId = existingIdByMsId.get(b.id);
@@ -967,6 +1314,13 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       await markSyncOk("products", { products: keepMsIds.size });
 
+      strapi.log.info(
+        `[moysklad-sample-sale] total=${sampleSaleStats.total} created=${sampleSaleStats.created} ` +
+          `updated=${sampleSaleStats.updated} skippedOutOfStock=${sampleSaleStats.skippedOutOfStock} ` +
+          `markedOutOfStock=${sampleSaleStats.markedOutOfStock} reactivated=${sampleSaleStats.reactivated} ` +
+          `preservedMissing=${sampleSaleStats.preservedMissing}`,
+      );
+
       return {
         ok: true,
         total: keepMsIds.size,
@@ -976,6 +1330,15 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           created: bundleItemsCreatedTotal,
           skipped: bundleItemsSkippedTotal,
           failed: bundlesFailed,
+        },
+        sampleSale: {
+          sampleSaleTotal: sampleSaleStats.total,
+          sampleSaleCreated: sampleSaleStats.created,
+          sampleSaleUpdated: sampleSaleStats.updated,
+          sampleSaleSkippedOutOfStock: sampleSaleStats.skippedOutOfStock,
+          sampleSaleMarkedOutOfStock: sampleSaleStats.markedOutOfStock,
+          sampleSaleReactivated: sampleSaleStats.reactivated,
+          sampleSalePreservedMissing: sampleSaleStats.preservedMissing,
         },
       };
     } catch (e) {

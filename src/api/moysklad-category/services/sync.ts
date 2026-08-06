@@ -19,6 +19,7 @@ import {
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
 import { enqueueMoySkladFullSync } from "../../../utils/moysklad-mutation-queue";
+import { SAMPLE_SALE_FOLDER_ID } from "../../../utils/moysklad-sample-sale";
 
 /** Упрощённый тип meta из MoySklad (нам нужен href и служебные поля). */
 type MoySkladMeta = { href: string; type: string; mediaType?: string };
@@ -147,7 +148,15 @@ const syncServiceFactory = () => {
       // 6) Формируем путь корня и фильтруем поддерево (root + все дочерние)
       const rootPath = buildFolderFullPath(rootFolder);
 
+      // Витринное поддерево + одна точечно разрешённая папка Sample Sale.
+      // Sample Sale определяется только по folder.id — ни по name, ни по pathName.
+      // Её родитель («Товары интернет-магазинов») в поддерево не входит,
+      // поэтому во втором проходе parent не проставится и категория останется корневой.
       const filtered = all.filter((f) => {
+        if (f.id === SAMPLE_SALE_FOLDER_ID) {
+          return true;
+        }
+
         const full = buildFolderFullPath(f);
         return full === rootPath || full.startsWith(`${rootPath}/`);
       });
@@ -167,7 +176,7 @@ const syncServiceFactory = () => {
           select: ["id", "slug"],
         });
 
-        const payload = {
+        const payload: Record<string, unknown> = {
           name: folder.name,
           moyskladId: folder.id,
           href: folder.meta.href,
@@ -178,6 +187,13 @@ const syncServiceFactory = () => {
 
           publishedAt: nowIso,
         };
+
+        // Sample Sale не должна появляться в меню каталога.
+        // Гарантируем флаг и при создании, и при обновлении существующей записи.
+        // Для остальных категорий isHiddenInMenu остаётся ручным полем.
+        if (folder.id === SAMPLE_SALE_FOLDER_ID) {
+          payload.isHiddenInMenu = true;
+        }
 
         if (existing) {
           await categoryQuery.update({ where: { id: existing.id }, data: payload });
@@ -217,9 +233,14 @@ const syncServiceFactory = () => {
       }
 
       /**
-       * 10) Чистка: удаляем категории вне поддерева
+       * 10) Чистка: удаляем категории вне поддерева.
+       *
+       * Категорию Sample Sale не удаляем никогда, даже если МойСклад не вернул
+       * папку в этом ответе: через связь с ней определяются защищённые товары,
+       * и её удаление разорвало бы relation и лишило товары защиты.
        */
       const keepIds = new Set(filtered.map((f) => f.id));
+      keepIds.add(SAMPLE_SALE_FOLDER_ID);
 
       await categoryQuery.deleteMany({
         where: { moyskladId: { $notIn: Array.from(keepIds) } },

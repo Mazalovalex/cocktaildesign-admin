@@ -149,6 +149,22 @@ function toNullableNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * stock из assortment.
+ *
+ * Отсутствующее значение → null: это допустимо и означает «нет в наличии».
+ * Значение другого типа НЕ подменяем на null или 0 — иначе битый ответ API
+ * молча превратился бы в «распродано». Такое значение отбрасывает
+ * assertValidSampleSaleStock() до любых записей в базу.
+ */
+function toStockValue(value: unknown): number | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  return value as number;
+}
+
 function toNullableBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
@@ -198,7 +214,7 @@ function normalizeAssortmentRow(row: MoySkladAssortmentRow): SampleSaleAssortmen
     name: toNullableString(row.name),
     type: toNullableString(row.meta?.type),
     productFolderId: pickIdFromHref(row.productFolder?.meta?.href),
-    stock: toNullableNumber(row.stock),
+    stock: toStockValue(row.stock),
     quantity: toNullableNumber(row.quantity),
     reserve: toNullableNumber(row.reserve),
     archived: toNullableBoolean(row.archived),
@@ -293,10 +309,100 @@ async function fetchAssortmentPage(
 
 /**
  * Флаг отсутствия по физическому stock.
- * null или <= 0 → нет в наличии.
+ * null или <= 0 → нет в наличии. quantity и reserve не участвуют.
  */
 export function resolveSampleSaleIsOutOfStock(stock: number | null): boolean {
   return stock === null || stock <= 0;
+}
+
+/** Принадлежность папке Sample Sale только по точному ID. */
+export function isSampleSaleFolderId(folderId: string | null | undefined): boolean {
+  return folderId === SAMPLE_SALE_FOLDER_ID;
+}
+
+/**
+ * Проверка одной строки остатка.
+ *
+ * null допустим и позднее трактуется как isOutOfStock = true.
+ * Любое число, включая 0, отрицательные и дробные, допустимо.
+ * Ошибка только если значение присутствует, но не является конечным number:
+ * строку "0" в число не превращаем.
+ */
+export function assertValidSampleSaleStock(item: SampleSaleAssortmentItem): void {
+  const stock: unknown = item.stock;
+
+  if (stock === null) {
+    return;
+  }
+
+  if (typeof stock !== "number" || !Number.isFinite(stock)) {
+    throw new Error(
+      `MoySklad sample-sale invalid stock for ${item.moyskladId}: type=${typeof stock}`,
+    );
+  }
+}
+
+/** Системные поля остатка для записи в Strapi. */
+export function buildSampleSaleStockFields(stock: number | null): {
+  moyskladStock: number | null;
+  isOutOfStock: boolean;
+} {
+  return {
+    moyskladStock: stock,
+    isOutOfStock: resolveSampleSaleIsOutOfStock(stock),
+  };
+}
+
+/** Сброс системных полей остатка (товар покинул Sample Sale). */
+export function buildClearedSampleSaleStockFields(): {
+  moyskladStock: null;
+  isOutOfStock: null;
+} {
+  return {
+    moyskladStock: null,
+    isOutOfStock: null,
+  };
+}
+
+/**
+ * Map остатков по moyskladId с валидацией до любых записей в базу.
+ * Бросает ошибку при пустом ответе, дублях и чужой папке —
+ * пустой/битый ответ нельзя трактовать как «всё распродано».
+ */
+export function buildSampleSaleStockMap(
+  items: SampleSaleAssortmentItem[],
+): Map<string, SampleSaleAssortmentItem> {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error(
+      "MoySklad sample-sale stock map aborted: assortment is empty (possible API or filter error)",
+    );
+  }
+
+  const map = new Map<string, SampleSaleAssortmentItem>();
+
+  for (const item of items) {
+    if (!item || typeof item.moyskladId !== "string" || !item.moyskladId) {
+      throw new Error("MoySklad sample-sale stock map aborted: row without moyskladId");
+    }
+
+    if (!isSampleSaleFolderId(item.productFolderId)) {
+      throw new Error(
+        `MoySklad sample-sale stock map aborted: foreign folder for ${item.moyskladId}`,
+      );
+    }
+
+    assertValidSampleSaleStock(item);
+
+    if (map.has(item.moyskladId)) {
+      throw new Error(
+        `MoySklad sample-sale stock map aborted: duplicate moyskladId ${item.moyskladId}`,
+      );
+    }
+
+    map.set(item.moyskladId, item);
+  }
+
+  return map;
 }
 
 /**
@@ -362,6 +468,8 @@ export async function fetchSampleSaleAssortmentItemById(
   for (const row of rows) {
     const item = normalizeAssortmentRow(row);
     if (item && item.moyskladId === safeId) {
+      // Битый stock должен стать ошибкой запроса, а не «нет в наличии».
+      assertValidSampleSaleStock(item);
       return item;
     }
   }

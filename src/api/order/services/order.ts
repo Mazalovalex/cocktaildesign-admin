@@ -254,6 +254,7 @@ async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderIte
           "href",
           "type",
           "isHiddenOnSite",
+          "isOutOfStock",
         ],
       },
     },
@@ -262,7 +263,11 @@ async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderIte
   if (variant) {
     const parentProduct = variant.product ?? null;
 
-    if (!parentProduct || parentProduct.isHiddenOnSite === true) {
+    if (
+      !parentProduct ||
+      parentProduct.isHiddenOnSite === true ||
+      parentProduct.isOutOfStock === true
+    ) {
       throw createOrderError("item_not_found");
     }
 
@@ -308,14 +313,23 @@ async function resolveOrderItemByCode(rawCode: string): Promise<ResolvedOrderIte
 
   const product = await productQuery.findOne({
     where: { code },
-    select: ["id", "name", "price", "discountExcluded", "href", "type", "isHiddenOnSite"],
+    select: [
+      "id",
+      "name",
+      "price",
+      "discountExcluded",
+      "href",
+      "type",
+      "isHiddenOnSite",
+      "isOutOfStock",
+    ],
   });
 
   if (!product) {
     throw createOrderError("item_not_found");
   }
 
-  if (product.isHiddenOnSite === true) {
+  if (product.isHiddenOnSite === true || product.isOutOfStock === true) {
     throw createOrderError("item_not_found");
   }
 
