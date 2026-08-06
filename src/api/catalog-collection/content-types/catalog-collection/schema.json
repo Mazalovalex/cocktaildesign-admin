@@ -44,6 +44,10 @@
       "type": "string",
       "default": "#2eae4a"
     },
+    "isHiddenInMenu": {
+      "type": "boolean",
+      "default": false
+    },
     "products": {
       "type": "relation",
       "relation": "manyToMany",
@@ -86,6 +90,12 @@
         "edit": {
           "label": "Категория",
           "description": "Выберите категорию-источник."
+        }
+      },
+      "isHiddenInMenu": {
+        "edit": {
+          "label": "Скрыть в меню каталога",
+          "description": "Подборка не отображается в меню “Каталог”, но её страница и другие блоки продолжают работать."
         }
       }
     }
