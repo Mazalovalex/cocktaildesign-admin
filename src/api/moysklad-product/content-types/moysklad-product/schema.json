@@ -145,6 +145,12 @@
     "isHiddenOnSite": {
       "type": "boolean",
       "default": false
+    },
+    "moyskladStock": {
+      "type": "decimal"
+    },
+    "isOutOfStock": {
+      "type": "boolean"
     }
   },
   "config": {
@@ -167,6 +173,18 @@
         "edit": {
           "label": "Бейджи",
           "description": "Выберите бейджи для карточки. Например: «Хит»."
+        }
+      },
+      "moyskladStock": {
+        "edit": {
+          "label": "Остаток в МойСклад",
+          "description": "Физический остаток из МойСклад. Поле обновляется синхронизацией. Не изменяйте вручную."
+        }
+      },
+      "isOutOfStock": {
+        "edit": {
+          "label": "Нет в наличии",
+          "description": "Системный флаг. Товар скрывается при нулевом или отрицательном остатке. Не изменяйте вручную."
         }
       }
     }
