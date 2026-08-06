@@ -794,6 +794,7 @@ export interface ApiMoyskladProductMoyskladProduct
     image: Schema.Attribute.Media<'images', true>;
     isHiddenOnSite: Schema.Attribute.Boolean &
       Schema.Attribute.DefaultTo<false>;
+    isOutOfStock: Schema.Attribute.Boolean;
     locale: Schema.Attribute.String & Schema.Attribute.Private;
     localizations: Schema.Attribute.Relation<
       'oneToMany',
@@ -806,6 +807,7 @@ export interface ApiMoyskladProductMoyskladProduct
       Schema.Attribute.Required &
       Schema.Attribute.Unique;
     moyskladNoveltyAt: Schema.Attribute.DateTime;
+    moyskladStock: Schema.Attribute.Decimal;
     name: Schema.Attribute.String & Schema.Attribute.Required;
     price: Schema.Attribute.Integer;
     priceOld: Schema.Attribute.Integer;
