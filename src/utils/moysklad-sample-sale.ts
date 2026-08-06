@@ -20,6 +20,53 @@ export type SampleSaleAssortmentItem = {
   imagesCount: number | null;
 };
 
+/** Папка productfolder из МойСклад (только GET). */
+export type SampleSaleFolderEntity = {
+  id: string;
+  name: string;
+  pathName?: string | null;
+  meta: {
+    href: string;
+    type?: string;
+  };
+  productFolder?: {
+    meta?: {
+      href?: string;
+    };
+  };
+};
+
+/** Сырой product из МойСклад для точечного upsert (только GET). */
+export type SampleSaleProductEntity = {
+  id?: string;
+  name?: string;
+  code?: string;
+  updated?: string;
+  description?: string;
+  meta?: {
+    href?: string;
+    type?: string;
+  };
+  productFolder?: {
+    meta?: {
+      href?: string;
+    };
+  };
+  salePrices?: unknown[];
+  uom?: {
+    name?: string;
+  };
+  weight?: number | null;
+  volume?: number | null;
+  supplier?: {
+    meta?: {
+      href?: string;
+    };
+  };
+  pathName?: string;
+  archived?: boolean;
+};
+
 type MoySkladMeta = {
   href?: string;
   type?: string;
@@ -160,10 +207,17 @@ function normalizeAssortmentRow(row: MoySkladAssortmentRow): SampleSaleAssortmen
   };
 }
 
-async function requestAssortmentPage(
-  url: string,
-  token: string,
-): Promise<MoySkladAssortmentListResponse> {
+function requireAccessToken(): string {
+  const token = process.env.MOYSKLAD_ACCESS_TOKEN;
+
+  if (!token) {
+    throw new Error("MOYSKLAD_ACCESS_TOKEN is not set");
+  }
+
+  return token;
+}
+
+async function requestJson<T>(url: string, token: string): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
@@ -179,22 +233,18 @@ async function requestAssortmentPage(
       throw new MoySkladSampleSaleHttpError(response.status);
     }
 
-    return (await response.json()) as MoySkladAssortmentListResponse;
+    return (await response.json()) as T;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function fetchAssortmentPage(
-  offset: number,
-  token: string,
-): Promise<MoySkladAssortmentListResponse> {
-  const url = buildAssortmentPageUrl(offset);
+async function fetchJsonWithRetry<T>(url: string, token: string, label: string): Promise<T> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await requestAssortmentPage(url, token);
+      return await requestJson<T>(url, token);
     } catch (err) {
       if (err instanceof MoySkladSampleSaleHttpError) {
         if (!isRetryableHttpStatus(err.status)) {
@@ -204,9 +254,7 @@ async function fetchAssortmentPage(
         lastError = err;
 
         if (attempt >= MAX_ATTEMPTS) {
-          throw new Error(
-            `MoySklad sample-sale assortment failed at offset=${offset}: ${err.message}`,
-          );
+          throw new Error(`MoySklad sample-sale ${label} failed: ${err.message}`);
         }
 
         await delay(RETRY_DELAYS_MS[attempt - 1] ?? 4000);
@@ -214,31 +262,41 @@ async function fetchAssortmentPage(
       }
 
       if (err instanceof SyntaxError) {
-        throw new Error(
-          `MoySklad sample-sale assortment failed at offset=${offset}: invalid JSON response`,
-        );
+        throw new Error(`MoySklad sample-sale ${label} failed: invalid JSON response`);
       }
 
       // AbortError / сетевые ошибки fetch — retry
       lastError =
-        err instanceof Error
-          ? err
-          : new Error(`MoySklad sample-sale network error at offset=${offset}`);
+        err instanceof Error ? err : new Error(`MoySklad sample-sale network error: ${label}`);
 
       if (attempt >= MAX_ATTEMPTS) {
-        throw new Error(
-          `MoySklad sample-sale assortment failed at offset=${offset}: ${lastError.message}`,
-        );
+        throw new Error(`MoySklad sample-sale ${label} failed: ${lastError.message}`);
       }
 
       await delay(RETRY_DELAYS_MS[attempt - 1] ?? 4000);
     }
   }
 
-  throw (
-    lastError ??
-    new Error(`MoySklad sample-sale assortment failed at offset=${offset}: exhausted retries`)
+  throw lastError ?? new Error(`MoySklad sample-sale ${label} failed: exhausted retries`);
+}
+
+async function fetchAssortmentPage(
+  offset: number,
+  token: string,
+): Promise<MoySkladAssortmentListResponse> {
+  return fetchJsonWithRetry<MoySkladAssortmentListResponse>(
+    buildAssortmentPageUrl(offset),
+    token,
+    `assortment offset=${offset}`,
   );
+}
+
+/**
+ * Флаг отсутствия по физическому stock.
+ * null или <= 0 → нет в наличии.
+ */
+export function resolveSampleSaleIsOutOfStock(stock: number | null): boolean {
+  return stock === null || stock <= 0;
 }
 
 /**
@@ -246,12 +304,7 @@ async function fetchAssortmentPage(
  * Фильтр — точный href папки по ID, без имени и pathName.
  */
 export async function fetchSampleSaleAssortment(): Promise<SampleSaleAssortmentItem[]> {
-  const token = process.env.MOYSKLAD_ACCESS_TOKEN;
-
-  if (!token) {
-    throw new Error("MOYSKLAD_ACCESS_TOKEN is not set");
-  }
-
+  const token = requireAccessToken();
   const items: SampleSaleAssortmentItem[] = [];
   let offset = 0;
 
@@ -280,4 +333,102 @@ export async function fetchSampleSaleAssortment(): Promise<SampleSaleAssortmentI
   throw new Error(
     `MoySklad sample-sale assortment pagination aborted: exceeded MAX_PAGES=${MAX_PAGES}`,
   );
+}
+
+/**
+ * Один товар из ассортимента Sample Sale по moyskladId (только GET).
+ * Фильтр: id + точный href папки.
+ */
+export async function fetchSampleSaleAssortmentItemById(
+  moyskladId: string,
+): Promise<SampleSaleAssortmentItem | null> {
+  const token = requireAccessToken();
+  const safeId = moyskladId.trim();
+
+  if (!safeId) {
+    throw new Error("MoySklad sample-sale assortment item: empty moyskladId");
+  }
+
+  const filter = encodeURIComponent(`id=${safeId};productFolder=${SAMPLE_SALE_FOLDER_HREF}`);
+  const url = `${MOYSKLAD_API_BASE}/entity/assortment?filter=${filter}&limit=10`;
+  const data = await fetchJsonWithRetry<MoySkladAssortmentListResponse>(
+    url,
+    token,
+    `assortment item id=${safeId}`,
+  );
+
+  const rows = Array.isArray(data.rows) ? data.rows : [];
+
+  for (const row of rows) {
+    const item = normalizeAssortmentRow(row);
+    if (item && item.moyskladId === safeId) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Папка Sample Sale из МойСклад (только GET).
+ */
+export async function fetchSampleSaleFolder(): Promise<SampleSaleFolderEntity> {
+  const token = requireAccessToken();
+  const url = `${MOYSKLAD_API_BASE}/entity/productfolder/${SAMPLE_SALE_FOLDER_ID}`;
+  const data = await fetchJsonWithRetry<SampleSaleFolderEntity>(
+    url,
+    token,
+    `productfolder id=${SAMPLE_SALE_FOLDER_ID}`,
+  );
+
+  if (!data || typeof data.id !== "string" || !data.id) {
+    throw new Error("MoySklad sample-sale folder response has no id");
+  }
+
+  if (data.id !== SAMPLE_SALE_FOLDER_ID) {
+    throw new Error("MoySklad sample-sale folder id mismatch");
+  }
+
+  if (!data.meta || typeof data.meta.href !== "string" || !data.meta.href) {
+    throw new Error("MoySklad sample-sale folder response has no meta.href");
+  }
+
+  if (typeof data.name !== "string") {
+    throw new Error("MoySklad sample-sale folder response has no name");
+  }
+
+  return data;
+}
+
+/**
+ * Полный product из МойСклад по id (только GET).
+ * Нужен для точечного upsert через syncOneFromWebhook.
+ */
+export async function fetchMoySkladProductEntity(
+  moyskladId: string,
+): Promise<SampleSaleProductEntity> {
+  const token = requireAccessToken();
+  const safeId = moyskladId.trim();
+
+  if (!safeId) {
+    throw new Error("MoySklad sample-sale product: empty moyskladId");
+  }
+
+  const url = `${MOYSKLAD_API_BASE}/entity/product/${encodeURIComponent(safeId)}`;
+  const data = await fetchJsonWithRetry<SampleSaleProductEntity>(
+    url,
+    token,
+    `product id=${safeId}`,
+  );
+
+  const entityId =
+    typeof data.id === "string" && data.id.trim()
+      ? data.id.trim()
+      : pickIdFromHref(data.meta?.href);
+
+  if (!entityId || entityId !== safeId) {
+    throw new Error(`MoySklad sample-sale product id mismatch for ${safeId}`);
+  }
+
+  return data;
 }
