@@ -27,7 +27,7 @@ const PRODUCT_BADGES_POPULATE = {
 
 const SEARCH_RESULT_POPULATE = {
   image: { select: ["url", "alternativeText", "formats"] },
-  category: { select: ["name"] },
+  category: { select: ["name", "moyskladId"] },
   variants: {
     select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
     populate: {
@@ -77,7 +77,7 @@ export type CatalogSearchV2ProductRow = {
   code?: string | null;
   moyskladNoveltyAt?: string | null;
   image?: CatalogSearchV2ImageRow[] | null;
-  category?: { name?: string | null } | null;
+  category?: { name?: string | null; moyskladId?: string | null } | null;
   variants?: CatalogSearchV2VariantRow[] | null;
   badges?: CatalogSearchV2ProductBadgeRelationRow[] | null;
 };

@@ -14,7 +14,23 @@ import {
   isProductNew,
   type ProductNoveltyConfig,
 } from "../../../utils/product-novelty";
+import { isSampleSaleFolderId } from "../../../utils/moysklad-sample-sale";
 import syncServiceFactory from "../services/sync";
+
+const UTSENKA_COLLECTION_SLUG = "utsenka";
+const UTSENKA_BREADCRUMB_LABEL = "Уценка";
+
+/** Витринное имя категории: Sample Sale не показываем пользователю. */
+function resolveStorefrontCategoryName(category: {
+  name?: string | null;
+  moyskladId?: string | null;
+} | null | undefined): string | null {
+  if (!category) return null;
+  if (isSampleSaleFolderId(category.moyskladId ?? null)) {
+    return UTSENKA_BREADCRUMB_LABEL;
+  }
+  return typeof category.name === "string" ? category.name : null;
+}
 
 function isSyncLockError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -179,7 +195,12 @@ type ProductRow = {
   // Флаг — товар скрыт с сайта (менеджер выключил его в Strapi)
   isHiddenOnSite?: boolean | null;
   image?: unknown;
-  category?: { id?: number | null; name?: string | null } | null;
+  category?: {
+    id?: number | null;
+    name?: string | null;
+    slug?: string | null;
+    moyskladId?: string | null;
+  } | null;
   specifications?: ProductSpecificationRow[] | null;
   variants?: VariantRow[] | null;
   moyskladNoveltyAt?: string | null;
@@ -202,6 +223,8 @@ function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
 }
 
 function mapCatalogProductPreviewItem(product: ProductRow, noveltyConfig: ProductNoveltyConfig) {
+  const isSampleSale = isSampleSaleFolderId(product.category?.moyskladId ?? null);
+
   return {
     id: product.id,
     attributes: {
@@ -217,6 +240,7 @@ function mapCatalogProductPreviewItem(product: ProductRow, noveltyConfig: Produc
       variants: mapPreviewVariants((product as any).variants),
       isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
       noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+      isSampleSale,
       badges: mapProductBadges(product.badges),
     },
   };
@@ -308,9 +332,14 @@ const PRODUCT_BADGES_POPULATE = {
   },
 } as const;
 
+/** category.moyskladId нужен для системного признака Sample Sale (isSampleSale). */
+const CATEGORY_SAMPLE_SALE_POPULATE = {
+  category: { select: ["id", "name", "slug", "moyskladId"] },
+} as const;
+
 const COLLECTION_PRODUCT_POPULATE = {
   image: { select: ["url", "alternativeText", "formats"] },
-  category: { select: ["id", "name", "slug"] },
+  ...CATEGORY_SAMPLE_SALE_POPULATE,
   variants: {
     select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
     populate: {
@@ -434,7 +463,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["id", "name", "slug"] },
+        ...CATEGORY_SAMPLE_SALE_POPULATE,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -480,7 +509,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["id", "name", "slug"] },
+        ...CATEGORY_SAMPLE_SALE_POPULATE,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -504,7 +533,7 @@ async function getCollectionProducts(strapi: any, collectionSlug: string): Promi
       select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["id", "name", "slug"] },
+        ...CATEGORY_SAMPLE_SALE_POPULATE,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -700,6 +729,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
+        ...CATEGORY_SAMPLE_SALE_POPULATE,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -745,6 +775,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
+        ...CATEGORY_SAMPLE_SALE_POPULATE,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -800,6 +831,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       select: [...CATALOG_PREVIEW_PRODUCT_SELECT],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
+        ...CATEGORY_SAMPLE_SALE_POPULATE,
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -866,7 +898,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       ],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["id"] },
+        category: { select: ["id", "moyskladId"] },
         specifications: {
           populate: {
             specification: {
@@ -900,9 +932,20 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     const categoryId = product.category?.id ?? null;
+    const categoryMoyskladId = product.category?.moyskladId ?? null;
+    const isSampleSale = isSampleSaleFolderId(categoryMoyskladId);
     let breadcrumbsCategories: BreadcrumbCategory[] = [];
 
-    if (categoryId) {
+    if (isSampleSale) {
+      // Техническая Sample Sale не должна попадать в UI/JSON-LD.
+      breadcrumbsCategories = [
+        {
+          id: `collection-${UTSENKA_COLLECTION_SLUG}`,
+          slug: UTSENKA_COLLECTION_SLUG,
+          name: UTSENKA_BREADCRUMB_LABEL,
+        },
+      ];
+    } else if (categoryId) {
       const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
         select: ["id", "name", "slug"],
         populate: { parent: { select: ["id"] } },
@@ -990,6 +1033,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           code: product.code ?? null,
           isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
           noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+          isSampleSale,
           badges: mapProductBadges(product.badges),
         },
       },
@@ -1044,7 +1088,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "code", "moyskladNoveltyAt"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["name"] },
+        category: { select: ["name", "moyskladId"] },
         variants: {
           select: ["id", "name", "moyskladId", "price", "priceOld", "code", "characteristics"],
           populate: {
@@ -1098,6 +1142,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         );
 
         const searchImage = parentHasImages ? parentImage : (fallbackVariantWithImage?.image ?? null);
+        const isSampleSale = isSampleSaleFolderId(product.category?.moyskladId ?? null);
 
         return {
           id: product.id,
@@ -1109,7 +1154,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             priceOld: product.priceOld ?? null,
             code: product.code ?? null,
             image: searchImage,
-            categoryName: product.category?.name ?? null,
+            categoryName: resolveStorefrontCategoryName(product.category),
             matchedVariant: matchedVariant
               ? {
                   id: matchedVariant.id,
@@ -1124,6 +1169,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
               : null,
             isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
             noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+            isSampleSale,
             badges: mapProductBadges(product.badges),
           },
         };
@@ -1198,7 +1244,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       select: ["id", "name", "moyskladId", "slug", "price", "priceOld", "moyskladNoveltyAt"],
       populate: {
         image: { select: ["url", "alternativeText", "formats"] },
-        category: { select: ["name"] },
+        category: { select: ["name", "moyskladId"] },
         variants: {
           select: ["id"],
           populate: {
@@ -1226,6 +1272,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           ? parentImage
           : (fallbackVariantWithImage?.image ?? null);
 
+        const isSampleSale = isSampleSaleFolderId(p.category?.moyskladId ?? null);
+
         return {
           id: p.id,
           attributes: {
@@ -1234,9 +1282,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             price: p.price ?? null,
             priceOld: p.priceOld ?? null,
             image: randomProductImage,
-            categoryName: (p as any).category?.name ?? null,
+            categoryName: resolveStorefrontCategoryName(p.category),
             isNew: isProductNew(p.moyskladNoveltyAt, noveltyConfig.noveltyDays),
             noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+            isSampleSale,
             badges: mapProductBadges(p.badges),
           },
         };

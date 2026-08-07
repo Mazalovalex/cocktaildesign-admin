@@ -9,10 +9,24 @@ import {
 } from "./catalog-search-v2";
 import { mapProductBadges } from "./product-badges";
 import { getProductNoveltyConfig, isProductNew } from "./product-novelty";
+import { isSampleSaleFolderId } from "./moysklad-sample-sale";
 import {
   normalizeSearchCode,
   normalizeSearchText,
 } from "./product-search-index";
+
+const UTSENKA_CATEGORY_LABEL = "Уценка";
+
+function resolveStorefrontCategoryName(category: {
+  name?: string | null;
+  moyskladId?: string | null;
+} | null | undefined): string | null {
+  if (!category) return null;
+  if (isSampleSaleFolderId(category.moyskladId ?? null)) {
+    return UTSENKA_CATEGORY_LABEL;
+  }
+  return typeof category.name === "string" ? category.name : null;
+}
 
 type ProductNoveltyConfig = Awaited<ReturnType<typeof getProductNoveltyConfig>>;
 
@@ -39,6 +53,7 @@ export type CatalogSearchV2ResponseAttributes = {
   matchedVariant: CatalogSearchV2MatchedVariant | null;
   isNew: boolean;
   noveltyBadgeColor: string;
+  isSampleSale: boolean;
   badges: ReturnType<typeof mapProductBadges>;
 };
 
@@ -188,6 +203,7 @@ export function mapCatalogSearchV2Rows(
   return rows.map((product) => {
     const matchedVariant = findMatchedVariant(product, query);
     const searchImage = resolveSearchImage(product);
+    const isSampleSale = isSampleSaleFolderId(product.category?.moyskladId ?? null);
 
     return {
       id: product.id,
@@ -199,10 +215,11 @@ export function mapCatalogSearchV2Rows(
         priceOld: product.priceOld ?? null,
         code: product.code ?? null,
         image: searchImage,
-        categoryName: product.category?.name ?? null,
+        categoryName: resolveStorefrontCategoryName(product.category),
         matchedVariant: matchedVariant ? mapMatchedVariant(matchedVariant) : null,
         isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
         noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
+        isSampleSale,
         badges: mapProductBadges(product.badges),
       },
     };
