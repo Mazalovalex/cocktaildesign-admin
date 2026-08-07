@@ -15,7 +15,6 @@ import {
   type ProductNoveltyConfig,
 } from "../../../utils/product-novelty";
 import {
-  SAMPLE_SALE_FOLDER_ID,
   buildSampleSaleMoyskladIdSetFromStrapiCategories,
   isInsideSampleSaleFolderTree,
 } from "../../../utils/moysklad-sample-sale";
@@ -1623,26 +1622,17 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       }
     }
 
-    // Формируем плоский список в формате categories-flat.
-    // Технический корень Sample Sale в sidebar не отдаём.
+    // Формируем плоский список в формате categories-flat
     const result = [];
     for (const catId of resultCategoryIds) {
       const cat = byId.get(catId);
       if (!cat) continue;
-
-      if (cat.moyskladId === SAMPLE_SALE_FOLDER_ID) {
-        continue;
-      }
 
       const slug = typeof cat.slug === "string" ? cat.slug.trim() : "";
       const name = typeof cat.name === "string" ? cat.name.trim() : "";
       if (!slug || !name) continue;
 
       const parentId = cat.parent?.id ?? null;
-      const parentNode = typeof parentId === "number" ? byId.get(parentId) : null;
-
-      // Если родитель — технический корень Sample Sale, для UI считаем категорию корневой.
-      const parentIsSampleSaleRoot = parentNode?.moyskladId === SAMPLE_SALE_FOLDER_ID;
 
       result.push({
         id: String(catId),
@@ -1650,10 +1640,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         name,
         // productsCount — сколько товаров из коллекции в этой категории
         productsCount: productCountByCategoryId.get(catId) ?? 0,
-        parentId:
-          parentId && parentId !== CATALOG_ROOT_PARENT_ID && !parentIsSampleSaleRoot
-            ? String(parentId)
-            : null,
+        parentId: parentId && parentId !== CATALOG_ROOT_PARENT_ID ? String(parentId) : null,
       });
     }
 
