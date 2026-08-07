@@ -133,6 +133,16 @@ function collectDescendantCategoryIds(params: {
   return result;
 }
 
+type CategoryImageMedia = {
+  url?: string | null;
+  alternativeText?: string | null;
+  formats?: {
+    medium?: { url?: string | null } | null;
+    small?: { url?: string | null } | null;
+    thumbnail?: { url?: string | null } | null;
+  } | null;
+} | null;
+
 type CategoryRowLite = {
   id: number;
   name?: string | null;
@@ -140,7 +150,29 @@ type CategoryRowLite = {
   moyskladId?: string | null;
   productsCount?: number | null;
   parent?: { id?: number | null } | null;
+  image?: CategoryImageMedia;
 };
+
+// Общий формат imageUrl/alt для categories-flat и collection categories-tree.
+// Fallback размера: medium → small → thumbnail → оригинал.
+function resolveCategoryImageFields(params: {
+  image?: CategoryImageMedia;
+  name?: string | null;
+}): { imageUrl: string | null; alt: string } {
+  const image = params.image ?? null;
+
+  const imageUrl =
+    image?.formats?.medium?.url ??
+    image?.formats?.small?.url ??
+    image?.formats?.thumbnail?.url ??
+    image?.url ??
+    null;
+
+  const altFromStrapi = typeof image?.alternativeText === "string" ? image.alternativeText.trim() : "";
+  const alt = altFromStrapi || (typeof params.name === "string" ? params.name : "");
+
+  return { imageUrl, alt };
+}
 
 type BreadcrumbCategory = {
   id: string;
@@ -680,20 +712,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     // Преобразуем результат в плоский формат для фронта.
     // Картинку отдаём как готовый URL (без массива форматов) и поле alt.
     ctx.body = sorted.map((c: any) => {
-      // Достаём картинку — берём лучший доступный размер
-      // medium → small → thumbnail → оригинал
-      const image = c.image ?? null;
-      const imagePath =
-        image?.formats?.medium?.url ??
-        image?.formats?.small?.url ??
-        image?.formats?.thumbnail?.url ??
-        image?.url ??
-        null;
-
-      // Alt-текст: если в Strapi задан alternativeText — берём его,
-      // иначе используем имя категории
-      const altFromStrapi = typeof image?.alternativeText === "string" ? image.alternativeText.trim() : "";
-      const alt = altFromStrapi || (typeof c.name === "string" ? c.name : "");
+      const { imageUrl, alt } = resolveCategoryImageFields({
+        image: c.image ?? null,
+        name: typeof c.name === "string" ? c.name : "",
+      });
 
       return {
         id: String(c.id),
@@ -702,7 +724,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         productsCount: toSafeCount(c.productsCount),
         parentId: c.parent?.id ? String(c.parent.id) : null,
         // Новые поля — для замены getTopCategoriesFromStrapi
-        imageUrl: imagePath,
+        imageUrl,
         alt,
       };
     });
@@ -1522,7 +1544,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
    * Фронт передаёт его в buildCatalogTree → получает дерево для CatalogSidebar.
    *
    * Формат ответа совпадает с /api/catalog/categories-flat:
-   * [{ id, slug, name, productsCount, parentId }]
+   * [{ id, slug, name, productsCount, parentId, imageUrl, alt }]
    *
    * Скрытые товары (isHiddenOnSite = true) исключаются — фильтр стоит
    * внутри getCollectionProducts(). То есть если в категории остались
@@ -1561,7 +1583,11 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
       select: ["id", "name", "slug", "productsCount", "moyskladId"],
-      populate: { parent: { select: ["id"] } },
+      populate: {
+        parent: { select: ["id"] },
+        // То же media-поле, что в categories-flat (для mobile drill-down плиток)
+        image: { select: ["url", "alternativeText", "formats"] },
+      },
       limit: 100000,
     });
 
@@ -1633,6 +1659,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       if (!slug || !name) continue;
 
       const parentId = cat.parent?.id ?? null;
+      const { imageUrl, alt } = resolveCategoryImageFields({
+        image: cat.image,
+        name,
+      });
 
       result.push({
         id: String(catId),
@@ -1641,6 +1671,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         // productsCount — сколько товаров из коллекции в этой категории
         productsCount: productCountByCategoryId.get(catId) ?? 0,
         parentId: parentId && parentId !== CATALOG_ROOT_PARENT_ID ? String(parentId) : null,
+        imageUrl,
+        alt,
       });
     }
 
