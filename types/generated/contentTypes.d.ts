@@ -641,6 +641,39 @@ export interface ApiKnowledgeItemKnowledgeItem
   };
 }
 
+export interface ApiMobileNavigationMobileNavigation
+  extends Struct.SingleTypeSchema {
+  collectionName: 'mobile_navigations';
+  info: {
+    description: '\u0423\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u0435 \u043F\u0443\u043D\u043A\u0442\u0430\u043C\u0438 \u043C\u043E\u0431\u0438\u043B\u044C\u043D\u043E\u0439 \u043D\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u0438 \u0441\u0430\u0439\u0442\u0430: \u0433\u043E\u0440\u0438\u0437\u043E\u043D\u0442\u0430\u043B\u044C\u043D\u044B\u043C \u043C\u0435\u043D\u044E \u043D\u0430 \u0433\u043B\u0430\u0432\u043D\u043E\u0439 \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u0435 \u0438 \u043F\u043E\u043B\u043D\u043E\u044D\u043A\u0440\u0430\u043D\u043D\u044B\u043C \u043C\u0435\u043D\u044E \u043F\u043E \u043A\u043D\u043E\u043F\u043A\u0435 \u00AB\u041C\u0435\u043D\u044E\u00BB.';
+    displayName: '\u041C\u043E\u0431\u0438\u043B\u044C\u043D\u0430\u044F \u043D\u0430\u0432\u0438\u0433\u0430\u0446\u0438\u044F';
+    pluralName: 'mobile-navigations';
+    singularName: 'mobile-navigation';
+  };
+  options: {
+    draftAndPublish: true;
+  };
+  attributes: {
+    createdAt: Schema.Attribute.DateTime;
+    createdBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+    items: Schema.Attribute.Component<
+      'navigation.mobile-navigation-item',
+      true
+    >;
+    locale: Schema.Attribute.String & Schema.Attribute.Private;
+    localizations: Schema.Attribute.Relation<
+      'oneToMany',
+      'api::mobile-navigation.mobile-navigation'
+    > &
+      Schema.Attribute.Private;
+    publishedAt: Schema.Attribute.DateTime;
+    updatedAt: Schema.Attribute.DateTime;
+    updatedBy: Schema.Attribute.Relation<'oneToOne', 'admin::user'> &
+      Schema.Attribute.Private;
+  };
+}
+
 export interface ApiMoyskladBundleItemMoyskladBundleItem
   extends Struct.CollectionTypeSchema {
   collectionName: 'moysklad_bundle_items';
@@ -1639,6 +1672,7 @@ declare module '@strapi/strapi' {
       'api::discount-tier.discount-tier': ApiDiscountTierDiscountTier;
       'api::homepage.homepage': ApiHomepageHomepage;
       'api::knowledge-item.knowledge-item': ApiKnowledgeItemKnowledgeItem;
+      'api::mobile-navigation.mobile-navigation': ApiMobileNavigationMobileNavigation;
       'api::moysklad-bundle-item.moysklad-bundle-item': ApiMoyskladBundleItemMoyskladBundleItem;
       'api::moysklad-category.moysklad-category': ApiMoyskladCategoryMoyskladCategory;
       'api::moysklad-product.moysklad-product': ApiMoyskladProductMoyskladProduct;

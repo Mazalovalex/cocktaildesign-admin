@@ -1,0 +1,32 @@
+{
+  "kind": "singleType",
+  "collectionName": "mobile_navigations",
+  "info": {
+    "singularName": "mobile-navigation",
+    "pluralName": "mobile-navigations",
+    "displayName": "Мобильная навигация",
+    "description": "Управление пунктами мобильной навигации сайта: горизонтальным меню на главной странице и полноэкранным меню по кнопке «Меню»."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "items": {
+      "type": "component",
+      "component": "navigation.mobile-navigation-item",
+      "repeatable": true,
+      "required": false
+    }
+  },
+  "config": {
+    "metadatas": {
+      "items": {
+        "edit": {
+          "label": "Пункты",
+          "description": "Пункты мобильной навигации. Их порядок в этом списке определяет порядок отображения на сайте."
+        }
+      }
+    }
+  }
+}

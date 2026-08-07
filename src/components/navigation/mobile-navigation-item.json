@@ -1,0 +1,86 @@
+{
+  "collectionName": "components_navigation_mobile_navigation_items",
+  "info": {
+    "displayName": "Пункт мобильной навигации",
+    "description": "Один пункт мобильной навигации. Может отображаться в горизонтальном меню на главной странице и/или в полноэкранном мобильном меню."
+  },
+  "options": {},
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "href": {
+      "type": "string",
+      "required": true
+    },
+    "homeImage": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["images"]
+    },
+    "menuImage": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["images"]
+    },
+    "showInHome": {
+      "type": "boolean",
+      "default": true
+    },
+    "showInMenu": {
+      "type": "boolean",
+      "default": true
+    },
+    "isActive": {
+      "type": "boolean",
+      "default": true
+    }
+  },
+  "config": {
+    "metadatas": {
+      "title": {
+        "edit": {
+          "label": "Название",
+          "description": "Название пункта, которое видит пользователь. Например: «Каталог», «Новинки», «Уценка» или «Система скидок»."
+        }
+      },
+      "href": {
+        "edit": {
+          "label": "Ссылка",
+          "description": "Ссылка, по которой откроется пункт меню. Для внутренних страниц указывайте путь от корня сайта, начиная с /. Например: /catalog или /catalog/collection/novinki."
+        }
+      },
+      "homeImage": {
+        "edit": {
+          "label": "Изображение для главной",
+          "description": "Изображение для горизонтального меню на главной странице мобильной версии сайта."
+        }
+      },
+      "menuImage": {
+        "edit": {
+          "label": "Изображение для меню",
+          "description": "Изображение для карточки в полноэкранном меню, которое открывается по кнопке «Меню» в нижней мобильной навигации."
+        }
+      },
+      "showInHome": {
+        "edit": {
+          "label": "Показывать на главной",
+          "description": "Показывать этот пункт в горизонтальном меню на главной странице мобильной версии."
+        }
+      },
+      "showInMenu": {
+        "edit": {
+          "label": "Показывать в меню",
+          "description": "Показывать этот пункт в полноэкранном мобильном меню, которое открывается по кнопке «Меню»."
+        }
+      },
+      "isActive": {
+        "edit": {
+          "label": "Активен",
+          "description": "Главный переключатель пункта. Если выключен, пункт не должен отображаться ни на главной странице, ни в мобильном меню."
+        }
+      }
+    }
+  }
+}
