@@ -26,11 +26,12 @@ import { rebuildProductSearchIndex } from "../../../utils/rebuild-product-search
 import {
   SAMPLE_SALE_FOLDER_ID,
   buildClearedSampleSaleStockFields,
+  buildSampleSaleMoyskladIdSetFromStrapiCategories,
   buildSampleSaleStockFields,
   buildSampleSaleStockMap,
   fetchSampleSaleAssortment,
   fetchSampleSaleAssortmentItemById,
-  isSampleSaleFolderId,
+  isInsideSampleSaleFolderTree,
   type SampleSaleAssortmentItem,
 } from "../../../utils/moysklad-sample-sale";
 
@@ -215,8 +216,26 @@ function buildFullProductPayload(
 }
 
 /**
+ * Один раз загружает Set moyskladId дерева Sample Sale из Strapi.
+ * Без N+1: один findMany + in-memory BFS.
+ */
+async function loadSampleSaleFolderIdSet(): Promise<Set<string>> {
+  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+  const rows = await categoryQuery.findMany({
+    select: ["id", "moyskladId"],
+    populate: { parent: { select: ["id"] } },
+    limit: 100000,
+  });
+
+  return buildSampleSaleMoyskladIdSetFromStrapiCategories(
+    Array.isArray(rows) ? rows : [],
+  );
+}
+
+/**
  * Скрывает ранее импортированный товар Sample Sale вместо физического удаления.
- * Возвращает true, если товар относится к папке Sample Sale.
+ * Возвращает true, если товар относится к дереву Sample Sale (корень или descendant).
  */
 async function hideSampleSaleProductIfNeeded(moyskladId: string): Promise<boolean> {
   const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
@@ -233,7 +252,13 @@ async function hideSampleSaleProductIfNeeded(moyskladId: string): Promise<boolea
     (product as { category?: { moyskladId?: string | null } | null } | null)?.category
       ?.moyskladId ?? null;
 
-  if (!product || !isSampleSaleFolderId(categoryMsId)) {
+  if (!product || !categoryMsId) {
+    return false;
+  }
+
+  const sampleSaleFolderIds = await loadSampleSaleFolderIdSet();
+
+  if (!isInsideSampleSaleFolderTree(categoryMsId, sampleSaleFolderIds)) {
     return false;
   }
 
@@ -634,12 +659,16 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
     let productDocumentId: string | null = null;
     let savedProductId: number;
 
-    if (isSampleSaleFolderId(categoryMsId)) {
+    // Sample Sale tree: один Set на webhook (корень + descendants).
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet();
+    const isSampleSaleProduct = isInsideSampleSaleFolderTree(categoryMsId, sampleSaleFolderIds);
+
+    if (isSampleSaleProduct) {
       // Остаток берём точечным GET. Ошибка запроса не должна менять запись.
       let stockItem: SampleSaleAssortmentItem | null;
 
       try {
-        stockItem = await fetchSampleSaleAssortmentItemById(moyskladId);
+        stockItem = await fetchSampleSaleAssortmentItemById(moyskladId, sampleSaleFolderIds);
       } catch (err) {
         strapi.log.error(
           `[moysklad-sample-sale] webhook stock fetch failed: product=${moyskladId} error=${String(err)}`,
@@ -903,23 +932,33 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
       const categories = await categoryQuery.findMany({
         select: ["id", "moyskladId"],
+        populate: { parent: { select: ["id"] } },
         limit: 10000,
       });
 
       // Set для быстрой проверки "входит ли категория в витрину"
-      const allowedCategoryMsIds = new Set(categories.map((c) => c.moyskladId));
+      const allowedCategoryMsIds = new Set(
+        categories
+          .map((c) => c.moyskladId)
+          .filter((id): id is string => typeof id === "string" && Boolean(id)),
+      );
 
       // Map для получения Strapi ID категории по её MoySklad ID
       const categoryIdByMsId = new Map<string, number>(
-        categories.map((c) => [c.moyskladId, c.id]),
+        categories
+          .filter((c) => typeof c.moyskladId === "string" && c.moyskladId)
+          .map((c) => [c.moyskladId as string, c.id]),
       );
+
+      // Sample Sale tree (корень + descendants) — один Set на весь sync.
+      const sampleSaleFolderIds = buildSampleSaleMoyskladIdSetFromStrapiCategories(categories);
 
       // --- 1a) Категория Sample Sale обязательна ---
       //
       // Через связь с ней определяются защищённые товары. Без неё sync не имеет
       // права работать: иначе товары Sample Sale останутся без stock-контроля
       // и без защиты от cleanup.
-      if (!allowedCategoryMsIds.has(SAMPLE_SALE_FOLDER_ID)) {
+      if (!sampleSaleFolderIds.has(SAMPLE_SALE_FOLDER_ID)) {
         throw new Error(
           "MoySklad product sync aborted: Sample Sale category is missing in Strapi " +
             `(moyskladId=${SAMPLE_SALE_FOLDER_ID}). Run the category sync first.`,
@@ -931,11 +970,14 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       // Ошибка запроса, пустой ответ, дубли, чужая папка или битый stock
       // останавливают sync ещё до create/update/delete.
       // Отсутствующий stock нельзя считать нулём.
-      const sampleSaleAssortment = await fetchSampleSaleAssortment();
-      const sampleSaleStockByMsId = buildSampleSaleStockMap(sampleSaleAssortment);
+      const sampleSaleAssortment = await fetchSampleSaleAssortment(sampleSaleFolderIds);
+      const sampleSaleStockByMsId = buildSampleSaleStockMap(
+        sampleSaleAssortment,
+        sampleSaleFolderIds,
+      );
 
       strapi.log.info(
-        `[moysklad-sample-sale] stock loaded before writes: rows=${sampleSaleStockByMsId.size}`,
+        `[moysklad-sample-sale] stock loaded before writes: rows=${sampleSaleStockByMsId.size} folders=${sampleSaleFolderIds.size}`,
       );
 
       // --- 2) Тянем все products из MoySklad (пагинация) ---
@@ -978,8 +1020,10 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
       const missingStockMsIds = allProducts
         .filter(
           (p) =>
-            isSampleSaleFolderId(pickIdFromHref(p.productFolder?.meta?.href)) &&
-            !sampleSaleStockByMsId.has(p.id),
+            isInsideSampleSaleFolderTree(
+              pickIdFromHref(p.productFolder?.meta?.href),
+              sampleSaleFolderIds,
+            ) && !sampleSaleStockByMsId.has(p.id),
         )
         .map((p) => p.id);
 
@@ -1028,14 +1072,14 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
           .map((r) => [r.moyskladId, r]),
       );
 
-      // Ранее импортированные товары Sample Sale — определяем по категории, не по имени
+      // Ранее импортированные товары Sample Sale — определяем по дереву категорий, не по имени
       const previousSampleSaleMsIds = new Set<string>(
         (existingRows as ExistingProductRow[])
           .filter(
             (r) =>
               Boolean(r.moyskladId) &&
               r.type === "product" &&
-              isSampleSaleFolderId(r.category?.moyskladId ?? null),
+              isInsideSampleSaleFolderTree(r.category?.moyskladId ?? null, sampleSaleFolderIds),
           )
           .map((r) => r.moyskladId),
       );
@@ -1085,7 +1129,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
         };
 
         // --- 5a) Sample Sale: остаток управляет видимостью, но не удалением ---
-        if (isSampleSaleFolderId(categoryMsId)) {
+        if (isInsideSampleSaleFolderTree(categoryMsId, sampleSaleFolderIds)) {
           sampleSaleStats.total += 1;
 
           // Запись защищена от cleanup независимо от остатка.
@@ -1198,7 +1242,7 @@ export default factories.createCoreService("api::moysklad-product.moysklad-produ
 
         // В Sample Sale контроль остатка реализован только для product.
         // Комплекты оттуда не создаём; уже существующие защищаем от удаления.
-        if (isSampleSaleFolderId(categoryMsId)) {
+        if (isInsideSampleSaleFolderTree(categoryMsId, sampleSaleFolderIds)) {
           if (existingIdByMsId.has(b.id)) {
             keepBundleMsIds.add(b.id);
           }

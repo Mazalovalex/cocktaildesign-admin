@@ -14,19 +14,42 @@ import {
   isProductNew,
   type ProductNoveltyConfig,
 } from "../../../utils/product-novelty";
-import { isSampleSaleFolderId } from "../../../utils/moysklad-sample-sale";
+import {
+  SAMPLE_SALE_FOLDER_ID,
+  buildSampleSaleMoyskladIdSetFromStrapiCategories,
+  isInsideSampleSaleFolderTree,
+} from "../../../utils/moysklad-sample-sale";
 import syncServiceFactory from "../services/sync";
 
 const UTSENKA_COLLECTION_SLUG = "utsenka";
 const UTSENKA_BREADCRUMB_LABEL = "Уценка";
 
-/** Витринное имя категории: Sample Sale не показываем пользователю. */
-function resolveStorefrontCategoryName(category: {
-  name?: string | null;
-  moyskladId?: string | null;
-} | null | undefined): string | null {
+/**
+ * Один раз за загружает Set moyskladId дерева Sample Sale.
+ * Дальше проверки товаров идут через Set — без N+1.
+ */
+async function loadSampleSaleFolderIdSet(strapi: any): Promise<Set<string>> {
+  const categoryQuery = strapi.db.query("api::moysklad-category.moysklad-category");
+
+  const rows = await categoryQuery.findMany({
+    select: ["id", "moyskladId"],
+    populate: { parent: { select: ["id"] } },
+    limit: 100000,
+  });
+
+  return buildSampleSaleMoyskladIdSetFromStrapiCategories(Array.isArray(rows) ? rows : []);
+}
+
+/** Витринное имя категории: любое дерево Sample Sale → «Уценка». */
+function resolveStorefrontCategoryName(
+  category: {
+    name?: string | null;
+    moyskladId?: string | null;
+  } | null | undefined,
+  sampleSaleFolderIds: Set<string>,
+): string | null {
   if (!category) return null;
-  if (isSampleSaleFolderId(category.moyskladId ?? null)) {
+  if (isInsideSampleSaleFolderTree(category.moyskladId ?? null, sampleSaleFolderIds)) {
     return UTSENKA_BREADCRUMB_LABEL;
   }
   return typeof category.name === "string" ? category.name : null;
@@ -115,6 +138,7 @@ type CategoryRowLite = {
   id: number;
   name?: string | null;
   slug?: string | null;
+  moyskladId?: string | null;
   productsCount?: number | null;
   parent?: { id?: number | null } | null;
 };
@@ -222,8 +246,15 @@ function mapPreviewVariants(rawVariants: VariantRow[] | null | undefined) {
   }));
 }
 
-function mapCatalogProductPreviewItem(product: ProductRow, noveltyConfig: ProductNoveltyConfig) {
-  const isSampleSale = isSampleSaleFolderId(product.category?.moyskladId ?? null);
+function mapCatalogProductPreviewItem(
+  product: ProductRow,
+  noveltyConfig: ProductNoveltyConfig,
+  sampleSaleFolderIds: Set<string>,
+) {
+  const isSampleSale = isInsideSampleSaleFolderTree(
+    product.category?.moyskladId ?? null,
+    sampleSaleFolderIds,
+  );
 
   return {
     id: product.id,
@@ -747,9 +778,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const hasMore = offset + rows.length < total;
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
 
     ctx.body = {
-      items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
+      items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig, sampleSaleFolderIds)),
       total,
       limit,
       offset,
@@ -796,9 +828,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const hasMore = offset + paginatedRows.length < total;
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
 
     ctx.body = {
-      items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
+      items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig, sampleSaleFolderIds)),
       total,
       limit,
       offset,
@@ -849,9 +882,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
 
     ctx.body = {
-      items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
+      items: rows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig, sampleSaleFolderIds)),
     };
   },
 
@@ -933,11 +967,12 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
 
     const categoryId = product.category?.id ?? null;
     const categoryMoyskladId = product.category?.moyskladId ?? null;
-    const isSampleSale = isSampleSaleFolderId(categoryMoyskladId);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
+    const isSampleSale = isInsideSampleSaleFolderTree(categoryMoyskladId, sampleSaleFolderIds);
     let breadcrumbsCategories: BreadcrumbCategory[] = [];
 
     if (isSampleSale) {
-      // Техническая Sample Sale не должна попадать в UI/JSON-LD.
+      // Техническое дерево Sample Sale не должно попадать в UI/JSON-LD.
       breadcrumbsCategories = [
         {
           id: `collection-${UTSENKA_COLLECTION_SLUG}`,
@@ -1067,6 +1102,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const productQuery = strapi.db.query("api::moysklad-product.moysklad-product");
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
 
     const rows: ProductRow[] = await productQuery.findMany({
       where: {
@@ -1142,7 +1178,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         );
 
         const searchImage = parentHasImages ? parentImage : (fallbackVariantWithImage?.image ?? null);
-        const isSampleSale = isSampleSaleFolderId(product.category?.moyskladId ?? null);
+        const isSampleSale = isInsideSampleSaleFolderTree(
+          product.category?.moyskladId ?? null,
+          sampleSaleFolderIds,
+        );
 
         return {
           id: product.id,
@@ -1154,7 +1193,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             priceOld: product.priceOld ?? null,
             code: product.code ?? null,
             image: searchImage,
-            categoryName: resolveStorefrontCategoryName(product.category),
+            categoryName: resolveStorefrontCategoryName(product.category, sampleSaleFolderIds),
             matchedVariant: matchedVariant
               ? {
                   id: matchedVariant.id,
@@ -1207,7 +1246,8 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
-    const items = mapCatalogSearchV2Rows(rows, query, noveltyConfig);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
+    const items = mapCatalogSearchV2Rows(rows, query, noveltyConfig, sampleSaleFolderIds);
 
     ctx.body = { items };
   },
@@ -1238,6 +1278,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     const randomOffset = Math.floor(Math.random() * (maxOffset + 1));
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
 
     const rows: ProductRow[] = await productQuery.findMany({
       where,
@@ -1272,7 +1313,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           ? parentImage
           : (fallbackVariantWithImage?.image ?? null);
 
-        const isSampleSale = isSampleSaleFolderId(p.category?.moyskladId ?? null);
+        const isSampleSale = isInsideSampleSaleFolderTree(
+          p.category?.moyskladId ?? null,
+          sampleSaleFolderIds,
+        );
 
         return {
           id: p.id,
@@ -1282,7 +1326,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
             price: p.price ?? null,
             priceOld: p.priceOld ?? null,
             image: randomProductImage,
-            categoryName: resolveStorefrontCategoryName(p.category),
+            categoryName: resolveStorefrontCategoryName(p.category, sampleSaleFolderIds),
             isNew: isProductNew(p.moyskladNoveltyAt, noveltyConfig.noveltyDays),
             noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,
             isSampleSale,
@@ -1331,6 +1375,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     const noveltyConfig = await getProductNoveltyConfig(strapi);
+    const sampleSaleFolderIds = await loadSampleSaleFolderIdSet(strapi);
 
     const selectionMode = collection.selectionMode ?? "manual";
 
@@ -1406,7 +1451,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
           description: collection.description ?? null,
           selectionMode: "new",
         },
-        items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
+        items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig, sampleSaleFolderIds)),
         total,
         limit,
         offset,
@@ -1463,7 +1508,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         description: collection.description ?? null,
         selectionMode: collection.selectionMode ?? "manual",
       },
-      items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig)),
+      items: paginatedRows.map((p) => mapCatalogProductPreviewItem(p, noveltyConfig, sampleSaleFolderIds)),
       total,
       limit,
       offset,
@@ -1516,7 +1561,7 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
     }
 
     const allCategories: CategoryRowLite[] = await categoryQuery.findMany({
-      select: ["id", "name", "slug", "productsCount"],
+      select: ["id", "name", "slug", "productsCount", "moyskladId"],
       populate: { parent: { select: ["id"] } },
       limit: 100000,
     });
@@ -1578,17 +1623,26 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
       }
     }
 
-    // Формируем плоский список в формате categories-flat
+    // Формируем плоский список в формате categories-flat.
+    // Технический корень Sample Sale в sidebar не отдаём.
     const result = [];
     for (const catId of resultCategoryIds) {
       const cat = byId.get(catId);
       if (!cat) continue;
+
+      if (cat.moyskladId === SAMPLE_SALE_FOLDER_ID) {
+        continue;
+      }
 
       const slug = typeof cat.slug === "string" ? cat.slug.trim() : "";
       const name = typeof cat.name === "string" ? cat.name.trim() : "";
       if (!slug || !name) continue;
 
       const parentId = cat.parent?.id ?? null;
+      const parentNode = typeof parentId === "number" ? byId.get(parentId) : null;
+
+      // Если родитель — технический корень Sample Sale, для UI считаем категорию корневой.
+      const parentIsSampleSaleRoot = parentNode?.moyskladId === SAMPLE_SALE_FOLDER_ID;
 
       result.push({
         id: String(catId),
@@ -1596,7 +1650,10 @@ export default factories.createCoreController("api::moysklad-category.moysklad-c
         name,
         // productsCount — сколько товаров из коллекции в этой категории
         productsCount: productCountByCategoryId.get(catId) ?? 0,
-        parentId: parentId && parentId !== CATALOG_ROOT_PARENT_ID ? String(parentId) : null,
+        parentId:
+          parentId && parentId !== CATALOG_ROOT_PARENT_ID && !parentIsSampleSaleRoot
+            ? String(parentId)
+            : null,
       });
     }
 

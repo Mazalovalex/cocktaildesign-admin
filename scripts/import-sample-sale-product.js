@@ -495,7 +495,10 @@ async function run(app, options, sampleSale) {
   console.log(`ms-id: ${msId}`);
   console.log('Загрузка товара из ассортимента Sample Sale...');
 
-  const assortmentItem = await sampleSale.fetchSampleSaleAssortmentItemById(msId);
+  const assortmentItem = await sampleSale.fetchSampleSaleAssortmentItemById(
+    msId,
+    new Set([folderId]),
+  );
   assertAssortmentItemValid(assortmentItem, msId, folderId);
 
   const before = await loadProductSnapshot(app, msId);

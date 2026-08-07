@@ -19,7 +19,10 @@ import {
   markSyncRunning,
 } from "../../../utils/moysklad-sync-state";
 import { enqueueMoySkladFullSync } from "../../../utils/moysklad-mutation-queue";
-import { SAMPLE_SALE_FOLDER_ID } from "../../../utils/moysklad-sample-sale";
+import {
+  SAMPLE_SALE_FOLDER_ID,
+  collectSampleSaleSubtreeMoyskladIds,
+} from "../../../utils/moysklad-sample-sale";
 
 /** Упрощённый тип meta из MoySklad (нам нужен href и служебные поля). */
 type MoySkladMeta = { href: string; type: string; mediaType?: string };
@@ -148,12 +151,15 @@ const syncServiceFactory = () => {
       // 6) Формируем путь корня и фильтруем поддерево (root + все дочерние)
       const rootPath = buildFolderFullPath(rootFolder);
 
-      // Витринное поддерево + одна точечно разрешённая папка Sample Sale.
-      // Sample Sale определяется только по folder.id — ни по name, ни по pathName.
-      // Её родитель («Товары интернет-магазинов») в поддерево не входит,
-      // поэтому во втором проходе parent не проставится и категория останется корневой.
+      // Витринное поддерево + полное дерево Sample Sale (корень + descendants).
+      // Sample Sale определяется только по folder.id корня и parent-связям —
+      // ни по name, ни по pathName.
+      // Родитель корня Sample Sale («Товары интернет-магазинов») в поддерево
+      // не входит, поэтому у корня Sample Sale parent не проставится.
+      const sampleSaleSubtreeIds = collectSampleSaleSubtreeMoyskladIds(all);
+
       const filtered = all.filter((f) => {
-        if (f.id === SAMPLE_SALE_FOLDER_ID) {
+        if (sampleSaleSubtreeIds.has(f.id)) {
           return true;
         }
 
@@ -188,10 +194,10 @@ const syncServiceFactory = () => {
           publishedAt: nowIso,
         };
 
-        // Sample Sale не должна появляться в меню каталога.
-        // Гарантируем флаг и при создании, и при обновлении существующей записи.
+        // Всё дерево Sample Sale (корень + descendants) скрыто из обычного меню.
+        // Форсируем каждый sync — менеджер не должен случайно открыть эти папки.
         // Для остальных категорий isHiddenInMenu остаётся ручным полем.
-        if (folder.id === SAMPLE_SALE_FOLDER_ID) {
+        if (sampleSaleSubtreeIds.has(folder.id)) {
           payload.isHiddenInMenu = true;
         }
 
@@ -235,12 +241,16 @@ const syncServiceFactory = () => {
       /**
        * 10) Чистка: удаляем категории вне поддерева.
        *
-       * Категорию Sample Sale не удаляем никогда, даже если МойСклад не вернул
+       * Корень Sample Sale не удаляем никогда, даже если МойСклад не вернул
        * папку в этом ответе: через связь с ней определяются защищённые товары,
        * и её удаление разорвало бы relation и лишило товары защиты.
+       * Актуальные descendants входят через filtered → keepIds.
        */
       const keepIds = new Set(filtered.map((f) => f.id));
       keepIds.add(SAMPLE_SALE_FOLDER_ID);
+      for (const id of sampleSaleSubtreeIds) {
+        keepIds.add(id);
+      }
 
       await categoryQuery.deleteMany({
         where: { moyskladId: { $notIn: Array.from(keepIds) } },

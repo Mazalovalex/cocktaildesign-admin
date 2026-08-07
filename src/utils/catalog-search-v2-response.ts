@@ -9,7 +9,7 @@ import {
 } from "./catalog-search-v2";
 import { mapProductBadges } from "./product-badges";
 import { getProductNoveltyConfig, isProductNew } from "./product-novelty";
-import { isSampleSaleFolderId } from "./moysklad-sample-sale";
+import { isInsideSampleSaleFolderTree } from "./moysklad-sample-sale";
 import {
   normalizeSearchCode,
   normalizeSearchText,
@@ -17,12 +17,15 @@ import {
 
 const UTSENKA_CATEGORY_LABEL = "Уценка";
 
-function resolveStorefrontCategoryName(category: {
-  name?: string | null;
-  moyskladId?: string | null;
-} | null | undefined): string | null {
+function resolveStorefrontCategoryName(
+  category: {
+    name?: string | null;
+    moyskladId?: string | null;
+  } | null | undefined,
+  sampleSaleFolderIds: Set<string>,
+): string | null {
   if (!category) return null;
-  if (isSampleSaleFolderId(category.moyskladId ?? null)) {
+  if (isInsideSampleSaleFolderTree(category.moyskladId ?? null, sampleSaleFolderIds)) {
     return UTSENKA_CATEGORY_LABEL;
   }
   return typeof category.name === "string" ? category.name : null;
@@ -199,11 +202,15 @@ export function mapCatalogSearchV2Rows(
   rows: CatalogSearchV2ProductRow[],
   query: PreparedCatalogSearchQuery,
   noveltyConfig: ProductNoveltyConfig,
+  sampleSaleFolderIds: Set<string>,
 ): CatalogSearchV2ResponseItem[] {
   return rows.map((product) => {
     const matchedVariant = findMatchedVariant(product, query);
     const searchImage = resolveSearchImage(product);
-    const isSampleSale = isSampleSaleFolderId(product.category?.moyskladId ?? null);
+    const isSampleSale = isInsideSampleSaleFolderTree(
+      product.category?.moyskladId ?? null,
+      sampleSaleFolderIds,
+    );
 
     return {
       id: product.id,
@@ -215,7 +222,7 @@ export function mapCatalogSearchV2Rows(
         priceOld: product.priceOld ?? null,
         code: product.code ?? null,
         image: searchImage,
-        categoryName: resolveStorefrontCategoryName(product.category),
+        categoryName: resolveStorefrontCategoryName(product.category, sampleSaleFolderIds),
         matchedVariant: matchedVariant ? mapMatchedVariant(matchedVariant) : null,
         isNew: isProductNew(product.moyskladNoveltyAt, noveltyConfig.noveltyDays),
         noveltyBadgeColor: noveltyConfig.noveltyBadgeColor,

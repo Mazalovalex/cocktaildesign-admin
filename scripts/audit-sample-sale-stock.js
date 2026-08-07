@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Только читающий аудит остатков папки Sample Sale в МойСклад.
+ * Только читающий аудит остатков дерева Sample Sale в МойСклад.
  *
  * — не пишет в МойСклад;
  * — не подключается к базе Strapi;
@@ -15,6 +15,9 @@
  */
 
 const path = require('path');
+
+const MOYSKLAD_API_BASE = 'https://api.moysklad.ru/api/remap/1.2';
+const PRODUCTFOLDER_PAGE_LIMIT = 100;
 
 function safeErrorMessage(error) {
   if (error instanceof Error && typeof error.message === 'string') {
@@ -80,7 +83,71 @@ function buildMoyskladIdStats(items) {
   };
 }
 
-function printReport(folderId, items) {
+function requireAccessToken() {
+  const token = process.env.MOYSKLAD_ACCESS_TOKEN;
+
+  if (!token) {
+    throw new Error('MOYSKLAD_ACCESS_TOKEN is not set');
+  }
+
+  return token;
+}
+
+/**
+ * Минимальный read-only GET всех productfolder.
+ * Нужны только id и parent href для collectSampleSaleSubtreeMoyskladIds.
+ * Не копирует category-sync.
+ */
+async function fetchAllProductFoldersReadonly(token) {
+  const folders = [];
+  let offset = 0;
+
+  while (true) {
+    const url =
+      `${MOYSKLAD_API_BASE}/entity/productfolder` +
+      `?limit=${PRODUCTFOLDER_PAGE_LIMIT}&offset=${offset}`;
+
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json;charset=utf-8',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`MoySklad productfolder HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const rows = Array.isArray(data.rows) ? data.rows : [];
+
+    for (const row of rows) {
+      if (!row || typeof row.id !== 'string' || !row.id) {
+        continue;
+      }
+
+      folders.push({
+        id: row.id,
+        productFolder: row.productFolder ?? null,
+      });
+    }
+
+    if (!data.meta?.nextHref) {
+      break;
+    }
+
+    if (rows.length === 0) {
+      break;
+    }
+
+    offset += PRODUCTFOLDER_PAGE_LIMIT;
+  }
+
+  return folders;
+}
+
+function printReport(folderId, folderCount, items) {
   const typeCounts = buildTypeCounts(items);
   const idStats = buildMoyskladIdStats(items);
 
@@ -106,7 +173,8 @@ function printReport(folderId, items) {
 
   console.log('');
   console.log('=== Sample Sale stock audit ===');
-  console.log(`folderId: ${folderId}`);
+  console.log(`rootFolderId: ${folderId}`);
+  console.log(`subtreeFolders: ${folderCount}`);
   console.log(`total: ${items.length}`);
   console.log(`product: ${typeCounts.product}`);
   console.log(`bundle: ${typeCounts.bundle}`);
@@ -135,7 +203,7 @@ function printReport(folderId, items) {
   } else {
     for (const item of firstInStock) {
       console.log(
-        `- ${item.moyskladId} | ${item.name ?? '(no name)'} | stock=${item.stock} | quantity=${item.quantity} | reserve=${item.reserve}`,
+        `- ${item.moyskladId} | ${item.name ?? '(no name)'} | stock=${item.stock} | quantity=${item.quantity} | reserve=${item.reserve} | folder=${item.productFolderId}`,
       );
     }
   }
@@ -160,19 +228,41 @@ async function main() {
   );
 
   const sampleSaleModule = require(modulePath);
-  const { SAMPLE_SALE_FOLDER_ID, fetchSampleSaleAssortment } = sampleSaleModule;
+  const {
+    SAMPLE_SALE_FOLDER_ID,
+    collectSampleSaleSubtreeMoyskladIds,
+    fetchSampleSaleAssortment,
+  } = sampleSaleModule;
 
   if (typeof fetchSampleSaleAssortment !== 'function') {
     throw new Error('Не удалось загрузить fetchSampleSaleAssortment из moysklad-sample-sale');
+  }
+
+  if (typeof collectSampleSaleSubtreeMoyskladIds !== 'function') {
+    throw new Error(
+      'Не удалось загрузить collectSampleSaleSubtreeMoyskladIds из moysklad-sample-sale',
+    );
   }
 
   if (typeof SAMPLE_SALE_FOLDER_ID !== 'string' || !SAMPLE_SALE_FOLDER_ID) {
     throw new Error('Не удалось загрузить SAMPLE_SALE_FOLDER_ID из moysklad-sample-sale');
   }
 
-  console.log('Загрузка ассортимента Sample Sale из МойСклад...');
-  const items = await fetchSampleSaleAssortment();
-  printReport(SAMPLE_SALE_FOLDER_ID, items);
+  const token = requireAccessToken();
+
+  console.log('Загрузка productfolder из МойСклад (read-only)...');
+  const folders = await fetchAllProductFoldersReadonly(token);
+
+  console.log('Построение Sample Sale subtree...');
+  const sampleSaleFolderIds = collectSampleSaleSubtreeMoyskladIds(folders);
+
+  console.log(
+    `Sample Sale folders: ${sampleSaleFolderIds.size} (root=${SAMPLE_SALE_FOLDER_ID})`,
+  );
+  console.log('Загрузка ассортимента Sample Sale subtree из МойСклад...');
+
+  const items = await fetchSampleSaleAssortment(sampleSaleFolderIds);
+  printReport(SAMPLE_SALE_FOLDER_ID, sampleSaleFolderIds.size, items);
 }
 
 main().catch((error) => {
